@@ -1,0 +1,56 @@
+
+
+class AutopoieticAnalysis:
+
+    def __init__(self, observer):
+        self.observer = observer
+
+    def get_simple_structures(self, kind, time=None):
+        
+        # find time or time interval
+        if time is None:
+            times = range(self.observer.universe.states)
+        elif isinstance(time, list):
+            times = time
+        else:
+            times = [time]
+
+        # collect info
+        unities = set()
+        for time_ in times:
+            # FIXME observer should be decoupled here (add func arg?)
+            l, t, w, h = self.observer.universe.rects[time_]
+            for y in range(t, t + h):
+                for x in range(l, l + w):
+                    space = (x, y)
+                    if self.observer.prop('alive', [space], time_):
+                        unities.add(space)
+
+        return unities
+            
+
+class Observer:
+
+    def __init__(self, universe):
+        self.universe = universe
+
+        
+    def _prop_alive(self, space, time):
+        
+        if len(space) > 1:
+            raise ValueError("Multi-cell alive-query not supported.")
+
+        alive = (space[0] in self.universe.states[time])
+        return alive
+
+        
+    def prop(self, kind, space, time):
+        
+        if not space:
+            return False
+
+        if kind == 'alive':
+            return self._property_alive(space, time)
+        
+        raise NotImplementedError("Not there yet.")
+        #return False

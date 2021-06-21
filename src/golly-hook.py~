@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+
+import golly as g
+
+
+
+#s = g.getstring("Enter the number of steps:", "arg", "woo")
+
+rect = g.getrect()
+cells = g.getcells(rect)
+cells = list(zip(cells[0::2], cells[1::2]))
+
+g.run(1)
+print(cells)
+
