@@ -1,6 +1,7 @@
 
 from collections import defaultdict
 from itertools import permutations, product
+from dataclasses import dataclass
 
 
 def set_first(s):
@@ -10,12 +11,19 @@ def set_first(s):
 
 
 def print_unities(unities_dict):
+    special_chars = {
+        'dot': '·',
+        'full': '●',
+        'empty': '○',
+        'dotted': '◌',
+    }
+    
     grid = defaultdict(lambda: defaultdict(list))
 
     for char, unities in unities_dict.items():
         for unity in unities:
             for x, y in unity.space:
-                grid[y][x] = char
+                grid[y][x] = special_chars.get(char, char)
 
     min_y = min(grid.keys())
     max_y = max(grid.keys())
@@ -26,21 +34,21 @@ def print_unities(unities_dict):
             
     min_pos = str((min_x, min_y))
     max_pos = str((max_x, max_y))
-    hr = '-' * (max_x - min_x + 1)
+    hr = '━' * (max_x - min_x + 1)
     
     print(f"{min_pos}")
-    print(f"+{hr}+")
+    print(f"┏{hr}┓")
 
     for y in range(min_y, max_y + 1):
-        print('|', end='')
+        print('┃', end='')
         for x in range(min_x, max_x + 1):
             cell = grid[y][x]
             if not cell:
                 cell = ' '
             print(cell, end='')
-        print('|')
+        print('┃')
     
-    print(f"+{hr}+")
+    print(f"┗{hr}┛")
     print(f"{max_pos:>{len(hr)+2}}")
 
 
@@ -67,14 +75,14 @@ class AutopoieticAnalysis:
             l, t, w, h = self.observer.universe.rects[time_]
             for y in range(t, t + h):
                 for x in range(l, l + w):
-                    unity = Unity(set([(x, y)]), time_)
+                    unity = Unity(frozenset([(x, y)]), time_)
                     if self.observer.prop(kind, unity):
                         unities.add(unity)
 
         return unities
 
 
-    # FIXME only glider for now
+    # FIXME only glider for now! future: auto-detect
     def get_complex_structures(self, kind, time=None):
         
         # find time or time interval
@@ -93,37 +101,67 @@ class AutopoieticAnalysis:
             for y in range(t, t + h - 5 + 1):
                 for x in range(l, l + w - 5 + 1):
                     # FIXME temporary restriction of loop
-                    if -5 <= x <= -3 and 2 <= y <= 4: pass
-                    else: continue
-                    print(f"now considering: ({x}, {y})")
+#                    if -5 <= x <= -3 and 2 <= y <= 4: pass
+#                    else: continue
+                    #print(f"now considering: ({x}, {y})")
                     space = set(product(range(x, x + 5), range(y, y + 5)))
                     # TODO add rotated biting away corners
+                    # TODO add second glider form
                     space.remove((x + 0, y + 0))
                     space.remove((x + 0, y + 1))
                     space.remove((x + 4, y + 0))
-                    unity = Unity(space, time_)
+                    unity = Unity(frozenset(space), time_)
                     if self.observer.prop('glider', unity):
                         unities.add(unity)
 
         return unities
 
-    
+
+@dataclass(frozen=True)
 class Unity:
+
+    space: frozenset
+    time: int
     
-    def __init__(self, space, time):
-        self.space = set(space)
-        self.time = time
+#    def __init__(self, space, time):
+#        self.space = set(space)
+#        self.time = time
         
     def __iter__(self):
         return iter((self.space, self.time))
     
-#    def __contains__(self, other):
-#        if self.time != other.time:
-#            return False
+    def __contains__(self, other):
+        if self.time != other.time:
+            return False
 #        return all(p in self.space for p in other.space)
+        return self.space.issuperset(other.space)
 
     def __repr__(self):
         return f"<U:{self.space}@{self.time}>"
+
+    def __eq__(self, other):
+        return self.space == other.space and self.time == other.time
+
+    def copy(self):
+        return Unity(self.space, self.time)
+
+    def translate(self, delta, time_delta=0):
+        dx, dy = delta
+        if dx != 0 or dy != 0:
+            space = frozenset((x + dx, y + dy) for (x, y) in self.space)
+        else:
+            space = self.space
+        return Unity(space, self.time + time_delta)
+
+    def mirror(self, xaxis=True):
+        raise NotImplementedError("Not there yet")        
+
+    def rotate(self, quartercircles):
+        if quartercircles % 4 == 0:
+            return self.copy()
+        # tricky case: (max_x - min_x) % 2 != (max_y - min_y) % 2
+        # no non-ambiguous center
+        raise NotImplementedError("Not there yet")
     
 
 class Observer:
@@ -150,18 +188,15 @@ class Observer:
         if len(space) != 22:
             return False
 
-        alive = [u for u in self.unities['alive'] if u.space.issubset(space)]
+        #alive = [u for u in self.unities['alive'] if u.space.issubset(space)]
+        alive = [u for u in self.unities['alive'] if u in unity]
 
         if len(alive) != 5:
             return False
         
-        dead = [u for u in self.unities['dead'] if u.space.issubset(space)]
-
-        print_unities({
-            '●': alive,
-            '◌': dead
-        })
-
+        #dead = [u for u in self.unities['dead'] if u.space.issubset(space)]
+        dead = [u for u in self.unities['dead'] if u in unity]
+        
         for perm in permutations(alive):
             u1, u2, u3, u4, u5 = perm
             if not self.relation('north-west-of', u1, u2): continue
@@ -176,17 +211,11 @@ class Observer:
             if not any(self.relation('north-east-of', u5, ud) for ud in dead): continue
             # success! alive unities in middle of pattern
             
-            print("yas relations spacing ###############")
-            
             # now let's check that the right cells are not specified
             if any(self.relation('south-west-west-of', u1, ud) for ud in dead): continue
-            print("yas d1")
             if any(self.relation('south-east-east-of', u1, ud) for ud in dead): continue
-            print("yas d2")
             if any(self.relation('south-south-east-of', u5, ud) for ud in dead): continue
             # success! we have a glider in .:, orientation
-
-            print("yas yas yas")
             
             return True
         
@@ -256,3 +285,31 @@ class Observer:
             return x1 - dx == x2 and y1 + dy == y2
             
         raise ValueError("Invalid kind specified: " + kind)
+
+
+    def _process_glider_travel_phase4(self, unities_in, unities_out):
+        time1 = set_first(unities_in).time
+        time2 = set_first(unities_out).time
+        tdelta = time2 - time1
+
+        if not all(u.time == time1 for u in unities_in):
+            return False
+        if not all(u.time == time2 for u in unities_out):
+            return False
+
+        for delta in product([-1, 1], [-1, 1]):
+            ui_translated = frozenset(u.translate(delta, tdelta) for u in unities_in)
+            if ui_translated == unities_out:
+                return True
+
+        return False
+        
+
+    # TODO review: double-set of unities vs: two unities?
+    def process(self, kind, unities_in, unities_out):
+
+        if kind == 'glider-travel-4':
+            return self._process_glider_travel_phase4(unities_in, unities_out)
+        
+        raise ValueError("Invalid kind specified: " + kind)
+    
