@@ -145,6 +145,7 @@ class Unity:
     def copy(self):
         return Unity(self.space, self.time)
 
+    # TODO don't transform unity, but constraints
     def translate(self, delta, time_delta=0):
         dx, dy = delta
         if dx != 0 or dy != 0:
@@ -153,9 +154,11 @@ class Unity:
             space = self.space
         return Unity(space, self.time + time_delta)
 
+    # TODO don't transform unity, but constraints
     def mirror(self, xaxis=True):
         raise NotImplementedError("Not there yet")        
 
+    # TODO don't transform unity, but constraints
     def rotate(self, quartercircles):
         if quartercircles % 4 == 0:
             return self.copy()
@@ -170,7 +173,53 @@ class Observer:
         self.universe = universe
         # "memory"
         self.unities = defaultdict(list)
+        self.properties = {
+            'alive': self._prop_alive,
+            'dead': lambda u: not self._prop_alive(u),
+            'glider': self._prop_glider
+        }
+        self.structures = [
+            ([1], []),
+            self._make_structure([
+                '....',
+                '.##.',
+                '.##.',
+                '....'
+            ]),
+            self._make_structure([
+                ' ... ',
+                ' .#..',
+                '...#.',
+                '.###.',
+                '.....'
+            ])
+        ]
+        print(self.structures)
 
+    def _make_structure(self, lines):
+        cells = {}
+        edges = []
+        for y, line in enumerate(lines):
+            for x, (cell1, cell2) in enumerate(zip(line[:-1], line[1:])):
+                if cell1 == ' ' or cell2 == ' ':
+                    continue
+                pos1, pos2 = (x, y), (x + 1, y)
+                for pos in (pos1, pos2):
+                    if pos not in cells:
+                        cells[cell] = len(cells)
+                edges.append(('west-of', cells[pos1], cells[pos2]))
+        transposed = [''.join(r) for r in zip(*lines)]
+        for x, line in enumerate(transposed):
+            for y, (cell1, cell2) in enumerate(zip(line[:-1], line[1:])):
+                if cell1 == ' ' or cell2 == ' ':
+                    continue
+                pos1, pos2 = (x, y), (x + 1, y)
+                for pos in (pos1, pos2):
+                    if cell not in cells:
+                        cells[cell] = len(cells)
+                edges.append(('north-of', cells[pos1], cells[pos2]))
+                break
+        return (list(range(len(cells))), edges)
         
     def _prop_alive(self, unity):
         space, time = unity
@@ -249,7 +298,8 @@ class Observer:
         
         raise ValueError("Invalid kind specified: " + kind)
 
-        
+
+    # FIXME this should take property values instead of unities
     def relation(self, kind, unity1, unity2):
 
         geography = {
