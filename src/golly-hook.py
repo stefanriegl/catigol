@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from pprint import pprint
+
 import golly as g
 
 import ap
@@ -52,26 +54,66 @@ else:
     times = [time1, time2]
 
     for time in times:
-        sa = analysis.get_simple_structures('alive', time)
-        sd = analysis.get_simple_structures('dead', time)
-        sg = analysis.get_complex_structures('glider', time)
-        structures[time] = (sa, sd, sg)
+        analysis.recognise_components('alive', time)
+        analysis.recognise_components('dead', time)
 
-    #    print('ALIVE: ', sa)
-    #    print('GLIDER:', sg)
+        # print(observer.components['alive'])
+        # print(observer.components['dead'])
+        # input()
+        
+        for kind in observer.relation_recognisers:
+            analysis.recognise_relations(kind, time)
+
+        # print("query")
+        # for kind, rels in observer.relations.items():
+        #     for rel in rels:
+        #         if kind == 'alive-link':
+        #             print(rel)
+        # input()
+            
+        structures1 = observer.find_structures('block', time)
+        structures2 = observer.find_structures('glider1', time)
+        structures = structures1 + structures2
+
+        # observer.find_structures('glider', time)
+        # sg = analysis.get_complex_structures('glider', time)
+        # structures[time] = (sa, sd, sg)
+
+        # sa = [x for x in observer.components['alive'] if x.time == time]
+        # sd = [x for x in observer.components['dead'] if x.time == time]
+
+        # print('ALIVE: ', sa)
+        # print('GLIDER:', sd)
+
+        sa = set()
+        sg = set()
+        for structure in structures:
+            for rel in structure.relations:
+                for comp in (rel.first, rel.second):
+                    if comp.kind == 'alive':
+                        sa.add(comp)
+                    if comp.kind == 'dead':
+                        sg.add(comp)
+        
+        # rels = [rel for rel in observer.relations['north-of']
+        #     if rel.first.time == time and
+        #         rel.first.kind == 'alive' and rel.second.kind == 'alive']
+        # pprint(rels)
 
         ap.print_unities({
-            'dot': sd,
+            # 'dot': sd,
             'dotted': sg,
             'full': sa,
         })
 
-    # FIXME theory: this is not optimal
-    unities_in = {ap.Unity(frozenset([p]), time1) for p in ap.set_first(structures[time1][2]).space}
-    unities_out = {ap.Unity(frozenset([p]), time2) for p in ap.set_first(structures[time2][2]).space}
-    movement = observer.process('glider-travel-4', unities_in, unities_out)
+        # break
 
-    print('MOVEMENT:', movement)
+    # FIXME theory: this is not optimal
+    # unities_in = {ap.Unity(frozenset([p]), time1) for p in ap.set_first(structures[time1][2]).space}
+    # unities_out = {ap.Unity(frozenset([p]), time2) for p in ap.set_first(structures[time2][2]).space}
+    # movement = observer.process('glider-travel-4', unities_in, unities_out)
+
+    # print('MOVEMENT:', movement)
 
     #    from pprint import pprint
     #    pprint(observer.unities['alive'])
