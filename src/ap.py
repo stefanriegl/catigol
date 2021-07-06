@@ -138,7 +138,7 @@ class AutopoieticAnalysis:
         pairs = permutations(components, 2)
         # pairs = permutations(set(self.observer.components.values()), 2)
         for first, second in pairs:
-            # ignore pairs of spaces without overlap (boundaries count)
+            # TODO ignore pairs of spaces without overlap (boundaries count)
             if first.kind == 'dead' and second.kind == 'dead':
                 # optimisation: not interested in those relations
                 continue
