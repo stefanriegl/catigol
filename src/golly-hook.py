@@ -76,7 +76,7 @@ else:
         # input()
             
         structures1 = observer.find_structures('block', time)
-        structures2 = observer.find_structures('glider1', time)
+        structures2 = observer.find_structures('glider-se-w1', time)
         structures = structures1 + structures2
 
         # observer.find_structures('glider', time)

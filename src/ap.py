@@ -255,17 +255,17 @@ class Observer:
         
         # "memory"
         self.components = defaultdict(list)
+        # TODO rename to component_relations
         self.relations = defaultdict(list)
         self.structures = defaultdict(list)
         self.processes = defaultdict(list)
         self.process_relations = defaultdict(list)
         self.organisations = defaultdict(list)
 
-        # for convenience
         self.component_recognisers = {
             'alive': self._is_component_alive,
             'dead': lambda *args: not self._is_component_alive(*args),
-            # 'glider': self._is_component_glider,
+            'glider': self._is_component_glider,
         }
         self.relation_recognisers = {
             'dead-alive-boundary': self._recognise_dead_alive_boundary,
@@ -281,23 +281,48 @@ class Observer:
         # }
         self.structure_classes = {
             # ([1], []),
-            'block': self._make_structure([
+            'block': self._make_structure_class([
                 '....',
                 '.##.',
                 '.##.',
                 '....'
             ]),
-            'glider1': self._make_structure([
+        }
+        
+        glider_patterns = {
+            'w': [
                 ' ... ',
                 ' .#..',
                 '...#.',
                 '.###.',
                 '.....'
-            ])
+            ],
+            'r': [
+                ' ... ',
+                ' .#..',
+                '..##.',
+                '.#.#.',
+                '.....'
+            ]
         }
-        self.process_classes = [
-            
-        ]
+        rotations = {
+            'se': lambda x: x,
+            'sw': util.pattern_rotate90,
+            'nw': util.pattern_rotate180,
+            'ne': util.pattern_rotate270,
+        }
+        chiralities = {
+            '1': lambda x: x,
+            '2': util.pattern_transpose,
+        }
+        for kgp, glider_pattern in glider_patterns.items():
+            for kr, fn_rot in rotations.items():
+                for kc, fn_chi in chiralities.items():
+                    pattern = fn_chi(fn_rot(glider_pattern))
+                    clazz = self._make_structure_class(pattern)
+                    key = f'glider-{kr}-{kgp}{kc}'
+                    self.structure_classes[key] = clazz
+
         self.organisation_classes = [
             
         ]
@@ -512,44 +537,18 @@ class Observer:
         return alive
 
 
-    # unused atm
+    # FUTURE should be automated. any structure could be component
+    # for now this only supports "remembering" structures,
+    # but not detecting by analysing a random space-time
     def _is_component_glider(self, space, time):
-
-        if len(space) != 22:
-            return False
-
-        #alive = [u for u in self.unities['alive'] if u.space.issubset(space)]
-        alive = [u for u in self.unities['alive'] if u in unity and u.time == time]
-
-        if len(alive) != 5:
-            return False
-        
-        #dead = [u for u in self.unities['dead'] if u.space.issubset(space)]
-        dead = [u for u in self.unities['dead'] if u in unity and u.time == time]
-        
-        for perm in permutations(alive):
-            u1, u2, u3, u4, u5 = perm
-            if not self.relation('north-west-of', u1, u2): continue
-            if not self.relation('north-of', u2, u3): continue
-            if not self.relation('east-of', u3, u4): continue
-            if not self.relation('east-of', u4, u5): continue
-            # success! alive unities in right constellation
-
-            # now let's check for some dead ones in right spots
-            if not any(self.relation('south-of', u1, ud) for ud in dead): continue
-            if not any(self.relation('north-west-of', u3, ud) for ud in dead): continue
-            if not any(self.relation('north-east-of', u5, ud) for ud in dead): continue
-            # success! alive unities in middle of pattern
-            
-            # now let's check that the right cells are not specified
-            if any(self.relation('south-west-west-of', u1, ud) for ud in dead): continue
-            if any(self.relation('south-east-east-of', u1, ud) for ud in dead): continue
-            if any(self.relation('south-south-east-of', u5, ud) for ud in dead): continue
-            # success! we have a glider in .:, orientation
-            
-            return True
-        
-        # no permutation of suitably arranged alive cells could be found
+        for structure in self.structures.get('glider', []):
+            components = structure.components()
+            if not components or set_first(components).time != time:
+                continue
+            structure_space = set()
+            structure_space.update(c.space for c in components)
+            if structure_space == space:
+                return True
         return False
 
         
