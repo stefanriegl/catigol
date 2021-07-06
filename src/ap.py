@@ -132,7 +132,7 @@ class AutopoieticAnalysis:
 
 
     def recognise_relations(self, kind, time):
-        component_lists = self.observer.components.values()
+        component_lists = self.observer.components[time].values()
         components = set(comp for cl in component_lists for comp in cl)
         # FIXME this can explode
         pairs = permutations(components, 2)
@@ -155,10 +155,10 @@ class Observer:
         self.universe = universe
         
         # "memory"
-        self.components = defaultdict(list)
+        self.components = defaultdict(lambda: defaultdict(list))
         # TODO rename to component_relations
-        self.relations = defaultdict(list)
-        self.structures = defaultdict(list)
+        self.relations = defaultdict(lambda: defaultdict(list))
+        self.structures = defaultdict(lambda: defaultdict(list))
         self.processes = defaultdict(list)
         self.process_relations = defaultdict(list)
         self.organisations = defaultdict(list)
@@ -324,8 +324,11 @@ class Observer:
         for constraint in clazz.constraints:
             constraint_groups[constraint.kind].append(constraint)
         def constraint_key(constraint):
-            kind = constraint.kind
-            return (len(self.relations[kind]), len(constraint_groups[kind]))
+            # kind = constraint.kind
+            # return (len(self.relations[kind]), len(constraint_groups[kind]))
+            len_rels = len(self.relations[time][constraint.kind])
+            len_const = len(constraint_groups[kind])
+            return (len_rels, len_const)
         constraints = sorted(clazz.constraints, key=constraint_key)
 
         rel_indices = [0] * len(clazz.constraints)
@@ -344,7 +347,7 @@ class Observer:
             constraint_index = len(solution_stack) - 1
             next_rel_index = rel_indices[constraint_index]
             constraint = constraints[constraint_index]
-            rel_rest = self.relations[constraint.kind][next_rel_index:]
+            rel_rest = self.relations[time][constraint.kind][next_rel_index:]
             cur_variables, cur_relations = solution_stack[-1]
 
             # if cur_relations:
@@ -417,7 +420,7 @@ class Observer:
         # print(f"+++ FOUND {kind} at {time} +++")
 
         structure = Structure(relations)
-        self.structures[kind].append(structure)
+        self.structures[time][kind].append(structure)
         return [structure]
         
 
@@ -432,8 +435,9 @@ class Observer:
     # for now this only supports "remembering" structures,
     # but not detecting by analysing a random space-time
     def _is_component_glider(self, space, time):
-        for structure in self.structures.get('glider', []):
+        for structure in self.structures[time].get('glider', []):
             components = structure.components()
+            # TODO tweak after test
             if not components or set_first(components).time != time:
                 continue
             structure_space = set()
@@ -450,7 +454,7 @@ class Observer:
             ValueError("Invalid compnent kind specified: " + kind)
         if recogniser(space, time):
             component = Component(kind, space, time)
-            self.components[kind].append(component)
+            self.components[time][kind].append(component)
             return component
         return None
 
@@ -525,7 +529,7 @@ class Observer:
             ValueError("Invalid relation kind specified: " + kind)
         if recogniser(comp1, comp2):
             relation = ComponentRelation(kind, comp1, comp2)
-            self.relations[kind].append(relation)
+            self.relations[comp1.time][kind].append(relation)
             return relation
         return None
 
