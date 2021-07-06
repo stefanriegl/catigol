@@ -1,85 +1,133 @@
 
-from collections import defaultdict, namedtuple
+# Implementation note:
+# This file uses type hints that require Python version >=3.9.
+#   https://docs.python.org/3/library/typing.html
+# If you get an error message such as
+#   TypeError: 'type' object is not subscriptable
+# then make sure to run this script (or Golly) with a suitable Python version.
+
+
+from collections import defaultdict
+from typing import NamedTuple
 from itertools import permutations, product, permutations
 from functools import partial
 from dataclasses import dataclass
 
 
+import util
+from util import set_first
+
+from importlib import reload
+import util
+reload(util)
+
+
 # TODO add repr
-Component = namedtuple('Component', ['kind', 'space', 'time'])
-Relation = namedtuple('Relation', ['kind', 'first', 'second'])
-Structure = namedtuple('Structure', ['relations'])
-RelationConstraint = namedtuple('RelationConstraint', ['kind', 'first', 'second'])
-StructureClass = namedtuple('StructureClass', ['variables', 'constraints'])
-# TODO tbc
+# Component = namedtuple('Component', ['kind', 'space', 'time'])
+# Relation = namedtuple('Relation', ['kind', 'first', 'second'])
+# Structure = namedtuple('Structure', ['relations'])
+
+# Process = namedtuple('Process', ['start', 'end'])
+# ProcessRelation = namedtuple('ProcessRelation', ['kind', 'first', 'second'])
+# Organisation = namedtuple('Organisation', ['relations'])
+
+# RelationConstraint = namedtuple('RelationConstraint', ['kind', 'first', 'second'])
+# StructureClass = namedtuple('StructureClass', ['variables', 'constraints'])
+# OrganisationClass = namedtuple('OrganisationClass', ['variables', 'constraints'])
 
 
-def set_first(s):
-    for e in s:
-        return e
-    return None
+class Component(NamedTuple):
+    """DOC"""
+    kind: str
+    space: frozenset[tuple[float]]
+    time: float
+    # TODO decide: add field "structure: Structure" here?
+    def __repr__(self) -> str:
+        return f'<C {self.kind} l{len(self.space)} t{self.time}>'
+
+class ComponentRelation(NamedTuple):
+    """DOC"""
+    kind: str
+    first: Component
+    second: Component
+    def __repr__(self) -> str:
+        return f'<CR {self.kind}\n  {self.first}\n  {self.second}>'
+
+class Structure(NamedTuple):
+    """DOC"""
+    relations: frozenset[ComponentRelation]
+    # FUTURE have this as field instead of function?
+    def components(self) -> frozenset[Component]:
+        comps = {r.first for r in self.relations}
+        comps.update({r.second for r in self.relations})
+        return frozenset(comps)
+    def __repr__(self) -> str:
+        comps = self.components()
+        time = set_first(self.relations).first.time if self.relations else '*'
+        return f'<S c{len(comps)} r{len(self.relations)} t{time}>'
 
 
-# FUTURE naming of variables
-def print_unities(unities_dict):
-    special_chars = {
-        'dot': '·',
-        'full': '●',
-        'empty': '○',
-        'dotted': '◌',
-    }
 
-    if not any(unities for unities in unities_dict.values()):
-        print("Nothing to draw.")
-        return
+# TODO decide: could Process be conflated with [Component]Relation?
+# maybe yes theoretically, but it won't be practical or easy to follow
+# relation: at one time. process: multiple start/end structures
+class Process(NamedTuple):
+    """DOC"""
+    start: frozenset[Structure]
+    end: frozenset[Structure]
+    def __repr__(self) -> str:
+        return f'<P {self.start} {self.end}>'
+
+class ProcessRelation(NamedTuple):
+    """DOC"""
+    kind: str
+    first: Process
+    second: Process
+    def __repr__(self) -> str:
+        return f'<PR {self.kind}\n  {self.first}\n  {self.second}>'
+
+class Organisation(NamedTuple):
+    """DOC"""
+    relations: frozenset[ProcessRelation]
+    def __repr__(self) -> str:
+        return f'<O r{len(self.relations)}>'
+
     
-    grid = defaultdict(lambda: defaultdict(list))
 
-    for char, unities in unities_dict.items():
-        for unity in unities:
-            for x, y in unity.space:
-                grid[y][x] = special_chars.get(char, char)
+class ComponentRelationConstraint(NamedTuple):
+    """DOC"""
+    kind: str
+    first: Component
+    second: Component
+    def __repr__(self) -> str:
+        return f'<CRC {self.kind}\n  {self.first}\n  {self.second}>'
 
-    min_y = min(grid.keys())
-    max_y = max(grid.keys())
+class StructureClass(NamedTuple):
+    """DOC"""
+    # FUTURE variables variable could be optimised
+    variables: list[int]
+    constraints: frozenset[ComponentRelationConstraint]
+    def __repr__(self) -> str:
+        return f'<SC v{len(self.variables)} c{len(self.constraints)}>'
 
-    min_xs, max_xs = zip(*((min(r), max(r)) for r in grid.values()))
-    min_x = min(min_xs)
-    max_x = max(max_xs)
-            
-    min_pos = str((min_x, min_y))
-    max_pos = str((max_x, max_y))
-    hr = '━' * (max_x - min_x + 1)
+
     
-    print(f"{min_pos}")
-    print(f"┏{hr}┓")
+class ProcessRelationConstraint(NamedTuple):
+    """DOC"""
+    kind: str
+    first: Process
+    second: Process
+    def __repr__(self) -> str:
+        return f'<PRC {self.kind}\n  {self.first}\n  {self.second}>'
 
-    for y in range(min_y, max_y + 1):
-        print('┃', end='')
-        for x in range(min_x, max_x + 1):
-            cell = grid[y][x]
-            if not cell:
-                cell = ' '
-            print(cell, end='')
-        print('┃')
-    
-    print(f"┗{hr}┛")
-    print(f"{max_pos:>{len(hr)+2}}")
+class OrganisationClass(NamedTuple):
+    """DOC"""
+    # FUTURE variables variable could be optimised
+    variables: list[int]
+    constraints: frozenset[ProcessRelationConstraint]
+    def __repr__(self) -> str:
+        return f'<OC v{len(self.variables)} c{len(self.constraints)}>'
 
-
-def print_structure_class_dot(clazz):
-    # sfdp -Gpad=.5 -Gnodesep=.25 -Tpng -o /tmp/graph.png
-    # print('digraph G { dpi="100"; size="30,20"; rankdir=LR; overlap=scale; spline=true; ', end='')
-    print('digraph G { ', end='')
-    for c in clazz.constraints:
-        if c.kind.endswith('-of'):
-            color = 'green'
-        elif c.kind == 'alive-link':
-            color = 'red'
-        else:
-            color = 'blue'
-        print(f'{c.first} -> {c.second} [label="{c.kind}", fontcolor="{color}", color={color}]; ', end='')
-    print(' }')
     
     
 class AutopoieticAnalysis:
@@ -98,11 +146,13 @@ class AutopoieticAnalysis:
 
 
     def recognise_relations(self, kind, time):
-        components = set()
-        for comps in self.observer.components.values():
-            components = components.union(comps)
+        component_lists = self.observer.components.values()
+        components = set(comp for cl in component_lists for comp in cl)
+        # FIXME this can explode
         pairs = permutations(components, 2)
+        # pairs = permutations(set(self.observer.components.values()), 2)
         for first, second in pairs:
+            # ignore pairs of spaces without overlap (boundaries count)
             if first.kind == 'dead' and second.kind == 'dead':
                 # optimisation: not interested in those relations
                 continue
@@ -258,7 +308,7 @@ class Observer:
 
 
     # move to utility class
-    def _make_structure(self, lines):
+    def _make_structure_class(self, lines):
         grid = [[c for c in line] for line in lines]
         w, h = len(lines[0]), len(lines)
         pos_center = (w // 2, h // 2)
@@ -304,21 +354,21 @@ class Observer:
                         continue
                     kinds = ('alive-link', reverse_geography[delta])
                     for kind in kinds:
-                        constraint = RelationConstraint(kind, index1, index2)
+                        constraint = ComponentRelationConstraint(kind, index1, index2)
                         constraints.append(constraint)
                 if c1 == '.' and c2 == '#':
                     kinds = ('dead-alive-boundary', reverse_geography[delta])
                     for kind in kinds:
-                        constraint = RelationConstraint(kind, index1, index2)
+                        constraint = ComponentRelationConstraint(kind, index1, index2)
                         constraints.append(constraint)
                     grid[y1][x1] = ' '
 
         return StructureClass(list(range(len(variables))), constraints)
         
 
-    # deprecated
+    # deprecated, unused
     # TODO move to some utility class
-    def _make_structure_old(self, lines):
+    def _make_structure_classes_old(self, lines):
         cells = {}
         edges = []
         for y, line in enumerate(lines):
@@ -584,7 +634,7 @@ class Observer:
         except KeyError:
             ValueError("Invalid relation kind specified: " + kind)
         if recogniser(comp1, comp2):
-            relation = Relation(kind, comp1, comp2)
+            relation = ComponentRelation(kind, comp1, comp2)
             self.relations[kind].append(relation)
             return relation
         return None

@@ -5,6 +5,7 @@ from pprint import pprint
 import golly as g
 
 import ap
+import util
 
 # better integration for Golly
 import importlib
@@ -47,6 +48,9 @@ else:
     print("Analyzing...")
     observer = ap.Observer(recorder)
     analysis = ap.AutopoieticAnalysis(observer)
+
+    # print("Structure classes of the observer:")
+    # print(observer.structure_classes)
 
     structures = {}
     time1 = 0
@@ -94,13 +98,15 @@ else:
                         sa.add(comp)
                     if comp.kind == 'dead':
                         sg.add(comp)
-        
+
+        print(structures)
+                    
         # rels = [rel for rel in observer.relations['north-of']
         #     if rel.first.time == time and
         #         rel.first.kind == 'alive' and rel.second.kind == 'alive']
         # pprint(rels)
 
-        ap.print_unities({
+        util.print_unities({
             # 'dot': sd,
             'dotted': sg,
             'full': sa,
