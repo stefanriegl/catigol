@@ -22,20 +22,6 @@ import util
 reload(util)
 
 
-# TODO add repr
-# Component = namedtuple('Component', ['kind', 'space', 'time'])
-# Relation = namedtuple('Relation', ['kind', 'first', 'second'])
-# Structure = namedtuple('Structure', ['relations'])
-
-# Process = namedtuple('Process', ['start', 'end'])
-# ProcessRelation = namedtuple('ProcessRelation', ['kind', 'first', 'second'])
-# Organisation = namedtuple('Organisation', ['relations'])
-
-# RelationConstraint = namedtuple('RelationConstraint', ['kind', 'first', 'second'])
-# StructureClass = namedtuple('StructureClass', ['variables', 'constraints'])
-# OrganisationClass = namedtuple('OrganisationClass', ['variables', 'constraints'])
-
-
 class Component(NamedTuple):
     """DOC"""
     kind: str
@@ -63,8 +49,8 @@ class Structure(NamedTuple):
         return frozenset(comps)
     def __repr__(self) -> str:
         comps = self.components()
-        time = set_first(self.relations).first.time if self.relations else '*'
-        return f'<S c{len(comps)} r{len(self.relations)} t{time}>'
+        tt = set_first(self.relations).first.time if self.relations else '*'
+        return f'<S c{len(comps)} r{len(self.relations)} t{tt}>'
 
 
 
@@ -163,91 +149,6 @@ class AutopoieticAnalysis:
             self.observer.recognise_relation(kind, first, second)
 
 
-    # FIXME only glider for now! future: auto-detect
-    def get_complex_structures(self, kind, time=None):
-        
-        # find time or time interval
-        if time is None:
-            times = range(len(self.observer.universe.states))
-        elif isinstance(time, list):
-            times = time
-        else:
-            times = [time]
-
-        # collect info
-        unities = set()
-        for time_ in times:
-            # FIXME observer should be decoupled here (add func arg?)
-            l, t, w, h = self.observer.universe.rects[time_]
-            for y in range(t, t + h - 5 + 1):
-                for x in range(l, l + w - 5 + 1):
-                    # FIXME temporary restriction of loop
-#                    if -5 <= x <= -3 and 2 <= y <= 4: pass
-#                    else: continue
-                    #print(f"now considering: ({x}, {y})")
-                    space = set(product(range(x, x + 5), range(y, y + 5)))
-                    # TODO add rotated biting away corners
-                    # TODO add second glider form
-                    space.remove((x + 0, y + 0))
-                    space.remove((x + 0, y + 1))
-                    space.remove((x + 4, y + 0))
-                    unity = Unity(frozenset(space), time_)
-                    if self.observer.prop('glider', unity):
-                        unities.add(unity)
-
-        return unities
-
-
-@dataclass(frozen=True)
-class Unity:
-
-    space: frozenset
-    time: int
-    
-#    def __init__(self, space, time):
-#        self.space = set(space)
-#        self.time = time
-        
-    def __iter__(self):
-        return iter((self.space, self.time))
-    
-    def __contains__(self, other):
-        if self.time != other.time:
-            return False
-#        return all(p in self.space for p in other.space)
-        return self.space.issuperset(other.space)
-
-    def __repr__(self):
-        return f"<U:{self.space}@{self.time}>"
-
-    def __eq__(self, other):
-        return self.space == other.space and self.time == other.time
-
-    def copy(self):
-        return Unity(self.space, self.time)
-
-    # TODO don't transform unity, but constraints
-    def translate(self, delta, time_delta=0):
-        dx, dy = delta
-        if dx != 0 or dy != 0:
-            space = frozenset((x + dx, y + dy) for (x, y) in self.space)
-        else:
-            space = self.space
-        return Unity(space, self.time + time_delta)
-
-    # TODO don't transform unity, but constraints
-    def mirror(self, xaxis=True):
-        raise NotImplementedError("Not there yet")        
-
-    # TODO don't transform unity, but constraints
-    def rotate(self, quartercircles):
-        if quartercircles % 4 == 0:
-            return self.copy()
-        # tricky case: (max_x - min_x) % 2 != (max_y - min_y) % 2
-        # no non-ambiguous center
-        raise NotImplementedError("Not there yet")
-    
-
 class Observer:
 
     def __init__(self, universe):
@@ -273,12 +174,6 @@ class Observer:
         }
         self._create_spatial_relation_recognisers()
 
-        # as theorised
-        # self.properties = {
-        #    'alive': self._prop_alive,
-        #    'dead': lambda u: not self._prop_alive(u),
-        #    'glider': self._prop_glider
-        # }
         self.structure_classes = {
             # ([1], []),
             'block': self._make_structure_class([
@@ -326,10 +221,6 @@ class Observer:
         self.organisation_classes = [
             
         ]
-        # from pprint import pprint
-        # pprint(self.structure_classes)
-        # print_structure_class_dot(self.structure_classes['block'])
-        # input()
 
 
     # move to utility class
