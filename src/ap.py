@@ -459,6 +459,23 @@ class Observer:
         return None
 
     
+    def recognise_relation(self, kind, comp1, comp2):
+        try:
+            recogniser = self.relation_recognisers[kind]
+        except KeyError:
+            ValueError("Invalid relation kind specified: " + kind)
+        if recogniser(comp1, comp2):
+            relation = ComponentRelation(kind, comp1, comp2)
+            self.relations[comp1.time][kind].append(relation)
+            return relation
+        return None
+
+
+    def recognise_process(self, kind, comps_in, comps_out):
+        
+        return None
+    
+
     def _create_spatial_relation_recognisers(self): 
         geography = {
             # tower of king
@@ -521,19 +538,6 @@ class Observer:
         return comp1.kind == 'alive' and comp2.kind == 'alive'
                 
 
-
-    def recognise_relation(self, kind, comp1, comp2):
-        try:
-            recogniser = self.relation_recognisers[kind]
-        except KeyError:
-            ValueError("Invalid relation kind specified: " + kind)
-        if recogniser(comp1, comp2):
-            relation = ComponentRelation(kind, comp1, comp2)
-            self.relations[comp1.time][kind].append(relation)
-            return relation
-        return None
-
-
     # unused atm
     def _process_glider_travel_phase4(self, unities_in, unities_out):
         time1 = set_first(unities_in).time
@@ -552,13 +556,3 @@ class Observer:
 
         return False
         
-
-    # TODO redo
-    # TODO review: double-set of unities vs: two unities?
-    def process(self, kind, unities_in, unities_out):
-
-        if kind == 'glider-travel-4':
-            return self._process_glider_travel_phase4(unities_in, unities_out)
-        
-        raise ValueError("Invalid kind specified: " + kind)
-    
