@@ -15,6 +15,7 @@ importlib.reload(ap)
 GENERATIONS_TO_RUN = 10
 
 
+# TODO rename to UniverseHistory
 class UniverseRecorder:
     def __init__(self):
         self.states = []
@@ -46,11 +47,10 @@ else:
 
 
     print("Analyzing...")
-    observer = ap.Observer(recorder)
-    analysis = ap.AutopoieticAnalysis(observer)
+    observer = ap.GliderObserver(recorder)
 
-    # print("Structure classes of the observer:")
-    # print(observer.structure_classes)
+    print("Structure classes of the observer:")
+    print(observer.structure_classes)
 
     structures = {}
     time1 = 0
@@ -58,15 +58,13 @@ else:
     times = [time1, time2]
 
     for time in times:
-        analysis.recognise_components('alive', time)
-        analysis.recognise_components('dead', time)
+        observer.recognise_all_components(times=[time])
 
         # print(observer.components['alive'])
         # print(observer.components['dead'])
         # input()
         
-        for kind in observer.relation_recognisers:
-            analysis.recognise_relations(kind, time)
+        observer.recognise_all_relations(times=[time])
 
         # print("query")
         # for kind, rels in observer.relations.items():

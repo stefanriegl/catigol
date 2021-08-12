@@ -115,11 +115,46 @@ class OrganisationClass(NamedTuple):
         return f'<OC v{len(self.variables)} c{len(self.constraints)}>'
 
     
+    
+class AutopoieticAnalysis:
+
+    def __init__(self, observer):
+        self.observer = observer
+
+        
+    def recognise_components(self, kind, time):
+        # FIXME observer should be decoupled here (add func arg?)
+        l, t, w, h = self.observer.universe.rects[time]
+        for y in range(t, t + h):
+            for x in range(l, l + w):
+                space = frozenset([(x, y)])
+                self.observer.recognise_component(kind, space, time)
+
+
+    def recognise_relations(self, kind, time):
+        component_lists = self.observer.components[time].values()
+        components = set(comp for cl in component_lists for comp in cl)
+        # FIXME this can explode
+        pairs = permutations(components, 2)
+        # pairs = permutations(set(self.observer.components.values()), 2)
+        for first, second in pairs:
+            # TODO ignore pairs of spaces without overlap (boundaries count)
+            if first.kind == 'dead' and second.kind == 'dead':
+                # optimisation: not interested in those relations
+                continue
+            # if first.kind == 'alive' and second.kind == 'alive':
+            #     # optimisation: don't find equivalent links twice
+            #     if hash(first) > hash(second):
+            #         continue
+            self.observer.recognise_relation(kind, first, second)
+
+
 class Observer:
 
-    def __init__(self):        
+    def __init__(self, universe):
+        self.universe = universe
+        
         # "memory"
-        # TODO rename to unities
         self.components = defaultdict(lambda: defaultdict(list))
         # TODO rename to component_relations
         self.relations = defaultdict(lambda: defaultdict(list))
@@ -128,56 +163,7 @@ class Observer:
         self.process_relations = defaultdict(list)
         self.organisations = defaultdict(list)
 
-        self.component_recognisers = {}
-        self.relation_recognisers = {}
-        self.process_recognisers = {}
-
-            
-    def recognise_component(self, kind, space, time):
-        try:
-            recogniser = self.component_recognisers[kind]
-        except KeyError:
-            raise ValueError("Invalid compnent kind specified: " + kind)
-        if recogniser(space, time):
-            component = Component(kind, space, time)
-            self.components[time][kind].append(component)
-            return component
-        return None
-
-    
-    def recognise_relation(self, kind, comp1, comp2):
-        try:
-            recogniser = self.relation_recognisers[kind]
-        except KeyError:
-            raise ValueError("Invalid relation kind specified: " + kind)
-        if recogniser(comp1, comp2):
-            relation = ComponentRelation(kind, comp1, comp2)
-            self.relations[comp1.time][kind].append(relation)
-            return relation
-        return None
-
-
-    def recognise_process(self, kind, comps_start, comps_end):
-        try:
-            recogniser = self.process_recognisers[kind]
-        except KeyError:
-            raise ValueError("Invalid process kind specified: " + kind)
-        if recogniser(comps_start, comps_end):
-            process = Process(kind, comps_start, comps_end)
-            self.processes[kind].append(process)
-            return process
-        return None
-
-    
-            
-class GliderObserver(Observer):
-
-    def __init__(self, universe):
-        super().__init__()
-
-        self.universe = universe
-        
-        # component (unity)
+        # component
         self.component_recognisers = {
             'alive': self._is_component_alive,
             'dead': lambda *args: not self._is_component_alive(*args),
@@ -193,7 +179,7 @@ class GliderObserver(Observer):
 
         # process
         self.process_recognisers = {}
-        # self._create_glider_process_recognisers()
+        self._create_glider_process_recognisers()
 
         # structure class
         self.structure_classes = {
@@ -223,44 +209,6 @@ class GliderObserver(Observer):
         }
 
 
-    def recognise_all_components(self, kinds=None, times=None):
-        if not kinds:
-            kinds = self.component_recognisers.keys()
-        if not times:
-            times = self.universe.rects.keys()
-        for kind in kinds:
-            for time in times:
-                l, t, w, h = self.universe.rects[time]
-                for y in range(t, t + h):
-                    for x in range(l, l + w):
-                        space = frozenset([(x, y)])
-                        self.recognise_component(kind, space, time)
-
-           
-    def recognise_all_relations(self, kinds=None, times=None):
-        if not kinds:
-            kinds = self.relation_recognisers.keys()
-        if not times:
-            times = self.universe.rects.keys()
-        for kind in kinds:
-            for time in times:
-                component_lists = self.components[time].values()
-                components = set(comp for cl in component_lists for comp in cl)
-                # FIXME this can explode
-                pairs = permutations(components, 2)
-                # pairs = permutations(set(self.observer.components.values()), 2)
-                for first, second in pairs:
-                    # TODO ignore pairs of spaces without overlap (boundaries count)
-                    # optimisation: not interested in empty relations
-                    if first.kind == 'dead' and second.kind == 'dead':
-                        continue
-                    # if first.kind == 'alive' and second.kind == 'alive':
-                    #     # optimisation: don't find equivalent links twice
-                    #     if hash(first) > hash(second):
-                    #         continue
-                    self.recognise_relation(kind, first, second)
-
-             
     # move to utility class
     def _make_structure_class(self, lines):
         grid = [[c for c in line] for line in lines]
@@ -275,12 +223,12 @@ class GliderObserver(Observer):
         deltas.remove((0, 0))
         # copied from below :s
         geography = {
-            # tower & king
+            # tower of king
             'west-of': (-1, 0),
             'east-of': (+1, 0),
             'north-of': (0, -1),
             'south-of': (0, +1),
-            # bishop & king
+            # bishop of king
             'north-west-of': (-1, -1),
             'north-east-of': (+1, -1),
             'south-west-of': (-1, +1),
@@ -520,6 +468,41 @@ class GliderObserver(Observer):
                 return True
         return False
 
+        
+    def recognise_component(self, kind, space, time):
+        try:
+            recogniser = self.component_recognisers[kind]
+        except KeyError:
+            ValueError("Invalid compnent kind specified: " + kind)
+        if recogniser(space, time):
+            component = Component(kind, space, time)
+            self.components[time][kind].append(component)
+            return component
+        return None
+
+    
+    def recognise_relation(self, kind, comp1, comp2):
+        try:
+            recogniser = self.relation_recognisers[kind]
+        except KeyError:
+            ValueError("Invalid relation kind specified: " + kind)
+        if recogniser(comp1, comp2):
+            relation = ComponentRelation(kind, comp1, comp2)
+            self.relations[comp1.time][kind].append(relation)
+            return relation
+        return None
+
+
+    def recognise_process(self, kind, comps_start, comps_end):
+        try:
+            recogniser = self.process_recognisers[kind]
+        except KeyError:
+            ValueError("Invalid process kind specified: " + kind)
+        if recogniser(comps_start, comps_end):
+            process = Process(kind, comps_start, comps_end)
+            self.processes[kind].append(process)
+            return process
+        return None
     
 
     def _create_spatial_relation_recognisers(self): 
@@ -587,3 +570,22 @@ class GliderObserver(Observer):
     def _recognise_process_glider(self, comps_start, comps_end):
         pass
     
+
+    # unused atm
+    def _process_glider_travel_phase4(self, unities_in, unities_out):
+        time1 = set_first(unities_in).time
+        time2 = set_first(unities_out).time
+        tdelta = time2 - time1
+
+        if not all(u.time == time1 for u in unities_in):
+            return False
+        if not all(u.time == time2 for u in unities_out):
+            return False
+
+        for delta in product([-1, 1], [-1, 1]):
+            ui_translated = frozenset(u.translate(delta, tdelta) for u in unities_in)
+            if ui_translated == unities_out:
+                return True
+
+        return False
+        
