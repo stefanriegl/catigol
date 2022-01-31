@@ -9,17 +9,14 @@
 
 from collections import defaultdict
 from typing import NamedTuple
-from itertools import permutations, product, permutations
+from itertools import permutations, permutations, product
 from functools import partial
 from dataclasses import dataclass
-
-
-import util
-from util import set_first
 
 from importlib import reload
 import util
 reload(util)
+from util import set_first #, make_structure_class
 
 
 class Component(NamedTuple):
@@ -59,10 +56,11 @@ class Structure(NamedTuple):
 # relation: at one time. process: multiple start/end structures
 class Process(NamedTuple):
     """DOC"""
-    start: frozenset[Structure]
-    end: frozenset[Structure]
+    kind: str
+    start: frozenset[Component]
+    end: frozenset[Component]
     def __repr__(self) -> str:
-        return f'<P {self.start} {self.end}>'
+        return f'<P {self.kind} {self.start} {self.end}>'
 
 class ProcessRelation(NamedTuple):
     """DOC"""
@@ -131,7 +129,6 @@ class Observer:
         self.component_recognisers = {}
         self.relation_recognisers = {}
         self.process_recognisers = {}
-
             
     def recognise_component(self, kind, space, time):
         try:
@@ -144,7 +141,6 @@ class Observer:
             return component
         return None
 
-    
     def recognise_relation(self, kind, comp1, comp2):
         try:
             recogniser = self.relation_recognisers[kind]
@@ -155,7 +151,6 @@ class Observer:
             self.relations[comp1.time][kind].append(relation)
             return relation
         return None
-
 
     def recognise_process(self, kind, comps_start, comps_end):
         try:
@@ -168,6 +163,10 @@ class Observer:
             return process
         return None
 
+    def get_all_components_at(self, time):
+        component_lists = self.components[time].values()
+        components = set(comp for cl in component_lists for comp in cl)
+        return components
     
             
 class GliderObserver(Observer):
@@ -192,23 +191,30 @@ class GliderObserver(Observer):
         self._create_spatial_relation_recognisers()
 
         # process
-        self.process_recognisers = {}
+        self.process_recognisers = {
+            'emptiness': self._recognise_process_emptiness,
+            'birth': self._recognise_process_birth,
+            'living': self._recognise_process_living,
+            'death': self._recognise_process_death,
+            'block': self._recognise_process_block,
+            'glider': self._recognise_process_glider,
+        }
         # self._create_glider_process_recognisers()
 
         # structure class
         self.structure_classes = {
-            'block': self._make_structure_class([
+            'block': make_structure_class([
                 '....',
                 '.##.',
                 '.##.',
                 '....'
             ]),
-            'blinker-h': self._make_structure_class([
+            'blinker-h': make_structure_class([
                 '.....',
                 '.###.',
                 '.....',
             ]),
-            'blinker-v': self._make_structure_class([
+            'blinker-v': make_structure_class([
                 '...',
                 '.#.',
                 '.#.',
@@ -216,140 +222,141 @@ class GliderObserver(Observer):
                 '...',
             ]),
         }
+        # nbh_sc_c = frozenset([
+        #     ComponentRelationConstraint('north-west-of', 0, 4),
+        #     ComponentRelationConstraint('north-of',      1, 4),
+        #     ComponentRelationConstraint('north-east-of', 2, 4),
+        #     ComponentRelationConstraint('west-of',       3, 4),
+        #     ComponentRelationConstraint('east-of',       5, 4),
+        #     ComponentRelationConstraint('south-west-of', 6, 4),
+        #     ComponentRelationConstraint('south-of',      7, 4),
+        #     ComponentRelationConstraint('south-est-of',  8, 4),
+        # ])
+        # nbh_sc = StructureClass(list(range(9)), nbh_sc_c)
+        # self.structure_classes['neighbourhood'] = nbh_sc
         self._create_glider_structure_classes()
 
         # organisation class
         self.organisation_classes = {
         }
 
+        # optimisation
+        self.component_structures = {}
+
 
     def recognise_all_components(self, kinds=None, times=None):
         if not kinds:
             kinds = self.component_recognisers.keys()
         if not times:
-            times = self.universe.rects.keys()
-        for kind in kinds:
-            for time in times:
-                l, t, w, h = self.universe.rects[time]
-                for y in range(t, t + h):
-                    for x in range(l, l + w):
-                        space = frozenset([(x, y)])
+            times = list(range(len(self.universe.rects)))
+        for time in times:
+            l, t, w, h = self.universe.rects[time]
+            for y in range(t, t + h):
+                for x in range(l, l + w):
+                    space = frozenset([(x, y)])
+                    for kind in kinds:
                         self.recognise_component(kind, space, time)
 
            
-    def recognise_all_relations(self, kinds=None, times=None):
+    def recognise_all_relations(self, kinds=None, times=None, skip_double_dead=True):
         if not kinds:
             kinds = self.relation_recognisers.keys()
         if not times:
-            times = self.universe.rects.keys()
-        for kind in kinds:
-            for time in times:
-                component_lists = self.components[time].values()
-                components = set(comp for cl in component_lists for comp in cl)
-                # FIXME this can explode
-                pairs = permutations(components, 2)
-                # pairs = permutations(set(self.observer.components.values()), 2)
-                for first, second in pairs:
-                    # TODO ignore pairs of spaces without overlap (boundaries count)
-                    # optimisation: not interested in empty relations
-                    if first.kind == 'dead' and second.kind == 'dead':
-                        continue
-                    # if first.kind == 'alive' and second.kind == 'alive':
-                    #     # optimisation: don't find equivalent links twice
-                    #     if hash(first) > hash(second):
-                    #         continue
+            times = list(range(len(self.universe.rects)))
+        for time in times:
+            components = self.get_all_components_at(time)
+            # FIXME this can explode
+            pairs = permutations(components, 2)
+            # pairs = permutations(set(self.observer.components.values()), 2)
+            for first, second in pairs:
+                # TODO ignore pairs of spaces without overlap (boundaries count)
+
+                # optimisation: not interested in empty relations
+                if skip_double_dead and first.kind == 'dead' and second.kind == 'dead':
+                    continue
+                
+                # if first.kind == 'alive' and second.kind == 'alive':
+                #     # optimisation: don't find equivalent links twice
+                #     if hash(first) > hash(second):
+                #         continue
+                for kind in kinds:
                     self.recognise_relation(kind, first, second)
 
-             
-    # move to utility class
-    def _make_structure_class(self, lines):
-        grid = [[c for c in line] for line in lines]
-        w, h = len(lines[0]), len(lines)
-        pos_center = (w // 2, h // 2)
-        
-        def cdist(pos):
-            return (pos_center[0] - pos[0])**2 + (pos_center[1] - pos[1])**2
-        pos_all = sorted(product(list(range(w)), list(range(h))), key=cdist)
-        
-        deltas = list(product((-1, 0, 1), (-1, 0, 1)))
-        deltas.remove((0, 0))
-        # copied from below :s
-        geography = {
-            # tower & king
-            'west-of': (-1, 0),
-            'east-of': (+1, 0),
-            'north-of': (0, -1),
-            'south-of': (0, +1),
-            # bishop & king
-            'north-west-of': (-1, -1),
-            'north-east-of': (+1, -1),
-            'south-west-of': (-1, +1),
-            'south-east-of': (+1, +1)
-        }
-        reverse_geography = {d: n for (n, d) in geography.items()}
-
-        variables = defaultdict()
-        variables.default_factory = lambda: len(variables)
-        constraints = []
-
-        for x1, y1 in pos_all:
-            for delta in deltas:
-                dx, dy = delta
-                x2, y2 = x1 - dx, y1 - dy
-                if x2 < 0 or y2 < 0 or x2 >= w or y2 >= h:
+           
+    def recognise_all_processes(self, kinds=None, times_start=None, times_end=None):
+        if not kinds:
+            kinds = self.process_recognisers.keys()
+        if not times_start:
+            times_start = list(range(len(self.universe.rects)))
+        if not times_end:
+            times_end = list(range(len(self.universe.rects)))
+        time_frames = [(s, e) for (s, e) in product(times_start, times_end) if s < e]
+        for time_start, time_end in time_frames:
+            comps_all_start = self.get_all_components_at(time_start)
+            comps_all_end = self.get_all_components_at(time_end)
+            # only consider 3x3->1x1 (basic GoL rules) grid-like component processes and
+            # processes that map from one to one component
+            for comp_center_start, comp_center_end in product(comps_all_start, comps_all_end):
+                if len(comp_center_start.space) > 1 or len(comp_center_end.space) > 1:
+                    if len(comp_center_start.space) > 1 and len(comp_center_end.space) > 1:
+                        comps_start = frozenset([comp_center_start])
+                        comps_end = frozenset([comp_center_end])
+                        for kind in kinds:
+                            self.recognise_process(kind, comps_start, comps_end)
                     continue
-                c1, c2 = grid[y1][x1], grid[y2][x2]
-                if c1 == ' ' or c2 == ' ':
+
+                # basic GoL rules below
+                if comp_center_start.space != comp_center_end.space:
                     continue
-                # print((x1, y2), (x2, y2), (c1, c2))
-                index1, index2 = variables[(x1, y1)], variables[(x2, y2)]
-                if c1 == '#' and c2 == '#':
-                    if ('alive-link', index2, index1) in constraints:
+                pos1 = set_first(comp_center_start.space)
+                comps_start = set()
+                for comp_start in comps_all_start:
+                    if len(comp_start.space) > 1:
                         continue
-                    kinds = ('alive-link', reverse_geography[delta])
-                    for kind in kinds:
-                        constraint = ComponentRelationConstraint(kind, index1, index2)
-                        constraints.append(constraint)
-                if c1 == '.' and c2 == '#':
-                    kinds = ('dead-alive-boundary', reverse_geography[delta])
-                    for kind in kinds:
-                        constraint = ComponentRelationConstraint(kind, index1, index2)
-                        constraints.append(constraint)
-                    grid[y1][x1] = ' '
-
-        return StructureClass(list(range(len(variables))), constraints)
-        
-
-    # deprecated, unused
-    # TODO move to some utility class
-    def _make_structure_classes_old(self, lines):
-        cells = {}
-        edges = []
-        for y, line in enumerate(lines):
-            for x, (cell1, cell2) in enumerate(zip(line[:-1], line[1:])):
-                if cell1 == ' ' or cell2 == ' ':
+                    pos2 = set_first(comp_start.space)
+                    if abs(pos1[0] - pos2[0]) <= 1 and abs(pos1[1] - pos2[1]) <= 1:
+                        comps_start.add(comp_start)
+                if len(comps_start) != 9:
                     continue
-                pos1, pos2 = (x, y), (x + 1, y)
-                for pos in (pos1, pos2):
-                    if pos not in cells:
-                        cells[pos] = len(cells)
-                edges.append(('west-of', cells[pos1], cells[pos2]))
-        transposed = [''.join(r) for r in zip(*lines)]
-        for x, line in enumerate(transposed):
-            for y, (cell1, cell2) in enumerate(zip(line[:-1], line[1:])):
-                if cell1 == ' ' or cell2 == ' ':
+                # skip entire neighbourhoods of uncoupled emptiness
+                if sum(1 for c in comps_start if c.kind == 'dead') == 9:
                     continue
-                pos1, pos2 = (x, y), (x + 1, y)
-                for pos in (pos1, pos2):
-                    if pos not in cells:
-                        cells[pos] = len(cells)
-                edges.append(('north-of', cells[pos1], cells[pos2]))
-                break
-        # return (list(range(len(cells))), edges)
-        edges = [(k, cells[p1], cells[p2]) for (k, p1, p2) in edges]
-        return StructureClass(list(range(len(cells))), edges)
+                comps_start = frozenset(comps_start)
+                comps_end = frozenset([comp_center_end])
+                for kind in kinds:
+                    self.recognise_process(kind, comps_start, comps_end)
+                
 
+    def decompose_structured_process(self, process):
+        # assume start and end components are singular components
+        if len(process.start) > 1 or len(process.end) > 1:
+            return None
+        comp_start = set_first(process.start)
+        comp_end = set_first(process.end)
+        # assume start and end components are structures
+        try:
+            struct_start = self.component_structures[comp_start]
+            struct_end = self.component_structures[comp_end]
+        except KeyError:
+            return None
+        comps_start = struct_start.components()
+        comps_end = struct_end.components()
+        kind = f'{process.kind}-decomposed'
+        decomposed_process = Process(kind, comps_start, comps_end)
+        return decomposed_process
+
+
+    def compose_processes(self, processes):
+        comps_start = set(c for p in processes for c in p.start)
+        comps_end = set(c for p in processes for c in p.end)
+        intersection = comps_start.intersection(comps_end)
+        comps_start.difference_update(intersection)
+        comps_end.difference_update(intersection)
+        kind = f'process-composed'
+        composed_process = Process(kind, frozenset(comps_start), frozenset(comps_end))
+        return composed_process      
     
+                    
     def _create_glider_structure_classes(self):
         glider_patterns = {
             'w': [
@@ -360,11 +367,11 @@ class GliderObserver(Observer):
                 '.....'
             ],
             'r': [
-                ' ... ',
-                ' .#..',
-                '..##.',
+                '.....',
                 '.#.#.',
-                '.....'
+                '..##.',
+                ' .#..',
+                ' ... '
             ]
         }
         rotations = {
@@ -380,13 +387,23 @@ class GliderObserver(Observer):
         for kgp, glider_pattern in glider_patterns.items():
             for kr, fn_rot in rotations.items():
                 for kc, fn_chi in chiralities.items():
-                    pattern = fn_chi(fn_rot(glider_pattern))
-                    clazz = self._make_structure_class(pattern)
+                    pattern = fn_rot(fn_chi(glider_pattern))
+                    clazz = make_structure_class(pattern)
                     key = f'glider-{kr}-{kgp}{kc}'
                     self.structure_classes[key] = clazz
+                    # print(f'key: {key}')
+                    # for line in pattern:
+                        # print(f'  {line}')
 
     
     # FIXME currently only finds first
+    # This is a bit dirty. If structures have classes, then those are
+    # basically also component classes. That means, when a structure of a
+    # certain class (kind) is found, observer can also remember it as a
+    # component.
+    # A more correct way would be to push identified structures into
+    # recognise_component(), but that takes more computational effort than
+    # this project warrants. :/
     def find_structures(self, kind, time):
         try:
             clazz = self.structure_classes[kind]
@@ -411,6 +428,7 @@ class GliderObserver(Observer):
 
         # from pprint import pprint
         # print("XXXXX", kind, time)
+        # print(clazz.constraints)
 
         # pprint({k: len(v) for (k, v) in self.relations.items()})
         # pprint(constraints)
@@ -438,8 +456,21 @@ class GliderObserver(Observer):
             # y = len([1 for p in pp if cur_variables[p].kind == 'alive' and set_first(cur_variables[p].space)[0] > -24])
             # m = "***" if y >= 3 else ""
             # print("CONSTRAINT", constraint_index, constraint, f"{y}/{t} {m}")
+
+            # d_v = len(cur_variables)
+            # d_c = len(cur_relations)
+            # d_va = len(clazz.variables)
+            # d_ca = count
+            # if d_c >= 0 and kind == 'neighbourhood':
+            #     print("CONSTRAINT", f"v{d_v}/{d_va} c{d_c}/{d_ca}")
+            #     # print(cur_variables)
+            #     # print(cur_relations)
+            #     print(self.relations[time][constraint.kind][next_rel_index:])
+            #     print(self.relations[time][constraint.kind])
+            #     print(self.relations[time])
             # pprint(cur_variables)
 
+            # fall back to None if not found
             comp1 = cur_variables.get(constraint.first)
             comp2 = cur_variables.get(constraint.second)
 
@@ -495,6 +526,15 @@ class GliderObserver(Observer):
 
         structure = Structure(relations)
         self.structures[time][kind].append(structure)
+
+        # quick fix: also store as component of same-named kind
+        # FIXME this might rather be done via recognise_component somehow
+        space = set()
+        space = space.union(*[c.space for c in structure.components()])
+        component = Component(kind, frozenset(space), time)
+        self.components[time][kind].append(component)
+        self.component_structures[component] = structure
+        
         return [structure]
         
 
@@ -582,8 +622,141 @@ class GliderObserver(Observer):
         if abs(x2 - x1) > 1 or abs(y2 - y1) > 1:
             return False
         return comp1.kind == 'alive' and comp2.kind == 'alive'
-                
 
-    def _recognise_process_glider(self, comps_start, comps_end):
-        pass
+    def _get_neighbourhood_center_component(self, comps):
+        pos_x = sum(set_first(c.space)[0] for c in comps) // 9
+        pos_y = sum(set_first(c.space)[1] for c in comps) // 9
+        space = frozenset([(pos_x, pos_y)])
+        center_comp = [c for c in comps if c.space == space][0]
+        return center_comp
+
+    # deprecated
+    def _count_alive_dead(self, comps):
+        center_comp = self._get_neighbourhood_center_component(comps)
+        count_alive = sum(1 for c in comps if c.kind == 'alive')
+        count_dead = sum(1 for c in comps if c.kind == 'dead')
+        return (center_comp.kind == 'alive', count_alive, count_dead)
+
+    def _recognise_process_emptiness(self, comps_start, comps_end):
+        if len(comps_start) != 9 or len(comps_end) != 1:
+            return False
+        comp_start = self._get_neighbourhood_center_component(comps_start)
+        comp_end = set_first(comps_end)
+        return comp_start.kind == 'dead' and comp_end.kind == 'dead'
+            
+    def _recognise_process_birth(self, comps_start, comps_end):
+        if len(comps_start) != 9 or len(comps_end) != 1:
+            return False
+        comp_start = self._get_neighbourhood_center_component(comps_start)
+        comp_end = set_first(comps_end)
+        return comp_start.kind == 'dead' and comp_end.kind == 'alive'
+
+    def _recognise_process_living(self, comps_start, comps_end):
+        if len(comps_start) != 9 or len(comps_end) != 1:
+            return False
+        comp_start = self._get_neighbourhood_center_component(comps_start)
+        comp_end = set_first(comps_end)
+        return comp_start.kind == 'alive' and comp_end.kind == 'alive'
     
+    def _recognise_process_death(self, comps_start, comps_end):
+        if len(comps_start) != 9 or len(comps_end) != 1:
+            return False
+        comp_start = self._get_neighbourhood_center_component(comps_start)
+        comp_end = set_first(comps_end)
+        return comp_start.kind == 'alive' and comp_end.kind == 'dead'
+
+    
+    def _recognise_process_block(self, comps_start, comps_end):
+        # we're only supporting single-comp to single-comp processes for now
+        if len(comps_start) > 1 or len(comps_end) > 1:
+            return False
+        comp_start = set_first(comps_start)
+        comp_end = set_first(comps_end)
+        return comp_start.kind == 'block' and comp_end.kind == 'block'
+    
+    def _recognise_process_glider(self, comps_start, comps_end):
+        # we're only supporting single-comp to single-comp processes for now
+        if len(comps_start) > 1 or len(comps_end) > 1:
+            return False
+        comp_start = set_first(comps_start)
+        comp_end = set_first(comps_end)
+        if not comp_start.kind.startswith('glider-'):
+            return False
+        if not comp_end.kind.startswith('glider-'):
+            return False
+        _, orientation_start, key_start = comp_start.kind.split('-')
+        _, orientation_end, key_end = comp_end.kind.split('-')
+        if orientation_start != orientation_end:
+            return False
+        key = key_start + key_end
+        intersection = comp_start.space.intersection(comp_end.space)
+        return key in 'r1w2r2w1r1' and len(intersection) in (18, 20)
+    
+
+
+def make_structure_class(lines):
+    grid = [[c for c in line] for line in lines]
+    w, h = len(lines[0]), len(lines)
+    pos_center = (w // 2, h // 2)
+
+    def cdist(pos):
+        return (pos_center[0] - pos[0])**2 + (pos_center[1] - pos[1])**2
+    pos_all = sorted(product(list(range(w)), list(range(h))), key=cdist)
+
+    deltas = list(product((-1, 0, 1), (-1, 0, 1)))
+    deltas.remove((0, 0))
+    # copied from below :s
+    geography = {
+        # tower & king
+        'west-of': (-1, 0),
+        'east-of': (+1, 0),
+        'north-of': (0, -1),
+        'south-of': (0, +1),
+        # bishop & king
+        'north-west-of': (-1, -1),
+        'north-east-of': (+1, -1),
+        'south-west-of': (-1, +1),
+        'south-east-of': (+1, +1)
+    }
+    reverse_geography = {d: n for (n, d) in geography.items()}
+
+    variables = defaultdict()
+    variables.default_factory = lambda: len(variables)
+    constraints = []
+
+    for x1, y1 in pos_all:
+        for delta in deltas:
+            dx, dy = delta
+            x2, y2 = x1 - dx, y1 - dy
+            if x2 < 0 or y2 < 0 or x2 >= w or y2 >= h:
+                continue
+            c1, c2 = grid[y1][x1], grid[y2][x2]
+            if c1 == ' ' or c2 == ' ':
+                continue
+            # TODO this part can use some optimisation
+            # - do not have both west-of and east-of relations etc.
+            # - requires changing different parts of code too
+            # - allows simplification in the then-blocks below
+            # print((x1, y2), (x2, y2), (c1, c2))
+            index1, index2 = variables[(x1, y1)], variables[(x2, y2)]
+            # quick'n'dirty hack to detect component sets for minimal processes
+            # if c1 == '?' and c2 == '?':
+            #     kind = reverse_geography[delta]
+            #     constraint = ComponentRelationConstraint(kind, index1, index2)
+            #     constraints.append(constraint)
+            if c1 == '#' and c2 == '#':
+                if ('alive-link', index2, index1) in constraints:
+                    continue
+                kinds = ('alive-link', reverse_geography[delta])
+                for kind in kinds:
+                    constraint = ComponentRelationConstraint(kind, index1, index2)
+                    constraints.append(constraint)
+            if c1 == '.' and c2 == '#':
+                kinds = ('dead-alive-boundary', reverse_geography[delta])
+                for kind in kinds:
+                    constraint = ComponentRelationConstraint(kind, index1, index2)
+                    constraints.append(constraint)
+                grid[y1][x1] = ' '
+
+    return StructureClass(list(range(len(variables))), constraints)
+

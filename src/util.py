@@ -1,5 +1,12 @@
 
 from collections import defaultdict
+from itertools import product
+
+#from ap import StructureClass, ComponentRelationConstraint
+
+import networkx as nx
+from matplotlib import pyplot as plot
+# import subprocess
 
 
 def set_first(s):
@@ -89,3 +96,201 @@ def pattern_mirror_x(pattern):
 
 def pattern_mirror_y(pattern):
     return list(reversed(pattern))
+
+
+def processes_to_graph(processes):
+    graph = nx.DiGraph()
+    component_names = {}
+
+    for index, process in enumerate(processes):
+        process_name = f'{process.kind}-p{index + 1}'
+        time = (max(c.time for c in process.start) + min(c.time for c in process.end)) / 2
+        graph.add_node(process_name, category='process', time=time, entity=process, index=index)
+        
+        for components, start in ((process.start, True), (process.end, False)):
+            for component in components:
+                
+                if component in component_names:
+                    component_name = component_names[component]
+                else:
+                    component_index = len(component_names) + 1
+                    component_name = f'{component.kind}-c{component_index}'
+                    component_names[component] = component_name
+                    graph.add_node(component_name, category='component', time=component.time, entity=component, index=component_index)
+
+                if start:
+                    node_start, node_end = component_name, process_name
+                else:
+                    node_start, node_end = process_name, component_name
+
+                graph.add_edge(node_start, node_end)
+
+        # print(process)
+        # break
+
+    # print(graph.nodes())
+    # print(graph.edges())
+    # print(component_names)
+
+    return graph
+
+
+def write_graph(graph, output_file_path, separate_components=True, do_labels=True, zoom=5, multipartite_layout=True):
+    ##  for page in pages:
+    ##    graph.add_node(page.id)
+    ##    for id in re_findall(export.Page.regex_link, page.text):
+    ##      graph.add_edge(page.id, id)
+    
+    # pos = nx.nx_pydot.graphviz_layout(graph, 'neato', None)
+    # pos = nx.nx_pydot.pydot_layout(graph, 'sfdp', None)
+    # pos = nx.spring_layout(graph, k=1)
+    # pos = nx.multipartite_layout(graph, subset_key='time', align='vertical')
+    # pos = nx.kamada_kawai_layout(graph)
+    # pos = nx.bipartite_layout(graph, nodes_component)
+
+    if separate_components:
+        subgraphs = [graph.subgraph(c) for c in nx.weakly_connected_components(graph)]
+    else:
+        subgraphs = [graph]
+
+    padding_y = None
+    pos = {}
+
+    # separate components (subgraphs) vertically
+    for subgraph in sorted(subgraphs, key=len, reverse=True):
+        if multipartite_layout:
+            subpos = nx.multipartite_layout(subgraph, subset_key='time', align='vertical')
+        else:
+            # subpos = nx.spring_layout(subgraph, k=1)
+            subpos = nx.nx_pydot.graphviz_layout(subgraph, 'dot', None)
+        if pos:
+            # determine component padding based on first component (biggest)
+            values_y = [y for x, y in pos.values()]
+            values_y_min = min(values_y)
+            if not padding_y:
+                padding_y = 0.2 * (max(values_y) - values_y_min)
+            offset_y = values_y_min - padding_y - max(y for (x, y) in subpos.values())
+            # print("O", values_y_min, padding_y, offset_y)
+            # for coord in subpos.values():
+            #     coord[1] += offset_y
+            subpos = {k: (x, y + offset_y) for k, (x, y) in subpos.items()}
+        pos.update(subpos)
+
+    if multipartite_layout:
+        # fix horizontal node positioning such that nodes for all components align
+        for node, data in graph.nodes(data=True):
+            # pos[node][0] = data["time"]
+            pos[node] = (data["time"], pos[node][1])
+
+    # # TODO debug output, move this elsewhere
+    # print("Component positions:")
+    # for node, data in sorted(graph.nodes(data=True), key=lambda t: t[1]['index']):
+    #     if data['category'] != 'component':
+    #         continue
+    #     space = data['entity'].space
+    #     position = set_first(space)
+    #     print(f'  {node}: {position}')
+
+    zoom *= 4
+    plot.figure(figsize=(2 * zoom, 2 * zoom))
+
+    # nodes
+    nodes_process = [n for n, d in graph.nodes(data=True) if d['category'] == 'process']
+    nodes_component = [n for n, d in graph.nodes(data=True) if d['category'] == 'component']
+    node_groups = [nodes_process, nodes_component]
+    colours = ['#ffff88', '#ff88ff']
+    shapes = 'so'
+    for nodes, colour, shape in zip(node_groups, colours, shapes):
+        colours = [colour] * len(nodes)
+        nx.draw_networkx_nodes(graph, pos, nodelist=nodes, node_shape=shape, node_color=colours)
+
+    # edges
+    colours = []
+    for node1, node2 in graph.edges():
+        node_proc = node1 if graph.nodes[node1]['category'] == 'process' else node2
+        kind = graph.nodes[node_proc]['entity'].kind
+        colour = '#cccccc' if kind == 'emptiness' else '#000000'
+        colours.append(colour)
+    nx.draw_networkx_edges(graph, pos, width=1, edge_color=colours)
+
+    # labels
+    if do_labels:
+        labels = {}
+        for node, data in graph.nodes(data=True):
+            if data['category'] == 'component':
+                space = data['entity'].space
+                if len(space) == 1:
+                    position = set_first(data['entity'].space)
+                else:
+                    poss_x, poss_y = zip(*space)
+                    pos_x = sum(poss_x) / len(poss_x)
+                    pos_y = sum(poss_y) / len(poss_y)
+                    position = f"({pos_x:.2f}, {pos_y:.2f})"
+                label = f"{node}\n{position}"
+            else:
+                label = node
+            labels[node] = label
+        # bbox_options = {"ec": "k", "fc": "white", "alpha": 0.5}
+        # nx.draw_networkx_labels(graph, pos, labels=labels, font_size=4, bbox=bbox_options)
+        nx.draw_networkx_labels(graph, pos, labels=labels, font_size=4, font_color='#000088')
+        
+    plot.axis('off')
+    # plot.show()
+
+    #  nx.draw(graph, pos=None, node_color='#A0CBE2', edge_color='none', width=1, edge_cmap=plot.cm.Blues, with_labels=False)
+    #  plot.savefig("graph.png", dpi=500, facecolor='w', edgecolor='w', orientation='portrait', papertype=None, format=None, transparent=False, bbox_inches=None, pad_inches=0.1) 
+    # nx.draw_spring(graph, node_color='#A0CBE2', linewidths=0, edge_color='#cccccc', width=1, with_labels=True)
+    plot.savefig(output_file_path, dpi=200, bbox_inches='tight')
+    # plot.show()
+    plot.close('all')
+
+
+# def write_graph(edges, output_file_path):
+# #  orientation="landscape"
+# #  bgcolor="transparent"
+# #  edge [penwidth="1.2"]
+# #  node [penwidth="1.2"]
+# #  node [fontname="sans"]
+#     graph_elems = ["""
+#         digraph G {
+#             size="6,10"
+#             dpi="100"
+#             rankdir=LR
+#             bgcolor="black"
+#             edge [color="green"]
+#             node [color="green"]
+#             node [fontcolor="green"]
+#             node [fontname="Arial"]
+#     """]
+#     graph_elems.extend(map(lambda n: f'{n[0]} [label="{n[1]}"];\n', nodes))
+#     graph_elems.extend(map(lambda e: f'{e[0]} -> {e[1]};\n', edges))
+#     graph_elems.append('}')
+#     graph_def = ''.join(graph_elems)
+#     proc = subprocess.Popen(['/usr/bin/neato', '-o%s' % output_file_path, '-Tpng'], stdin=subprocess.PIPE)
+#     proc.communicate(input=graph_def)
+#     proc.wait()
+
+
+def group_overlapping_processes(processes):
+    proc_by_comp = defaultdict(list)
+    for process in processes:
+        for comps in (process.start, process.end):
+            for comp in comps:
+                proc_by_comp[comp].append(process)
+    processes_left = processes.copy()
+    processes_agenda = []
+    groups = []
+    while processes_left:
+        group = []
+        groups.append(group)
+        processes_agenda = [processes_left.pop()]
+        while processes_agenda:
+            proc = processes_agenda.pop()
+            group.append(proc)
+            for comps in (proc.start, proc.end):
+                for comp in comps:
+                    for proc_comp in proc_by_comp[comp]:
+                        if proc_comp in processes_left:
+                            processes_left.remove(proc_comp)
+                            processes_agenda.append(proc_comp)
+    return groups
