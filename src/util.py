@@ -9,6 +9,25 @@ from matplotlib import pyplot as plot
 # import subprocess
 
 
+class ReportSection:
+    def __init__(self, header=None, footer=None, glyph='*', width=78):
+        self.width = width
+        self.glyph = glyph
+        self.header = header
+        self.footer = footer
+    def _print_box(self, text):
+        print(self.glyph * self.width)
+        print('{{}} {{:{}s}} {{}}'.format(self.width - 4).format(self.glyph, text, self.glyph))
+        print(self.glyph * self.width)
+    def __enter__(self):
+        if self.header:
+            print()
+            self._print_box(self.header)
+    def __exit__(self, type_, value, traceback):
+        if self.footer:
+            self._print_box(self.footer)
+
+
 def set_first(s):
     for e in s:
         return e
@@ -32,7 +51,8 @@ def print_unities(unities_dict):
 
     for char, unities in unities_dict.items():
         for unity in unities:
-            for x, y in unity.space:
+            for cell in unity.space:
+                x, y = cell.location
                 grid[y][x] = special_chars.get(char, char)
 
     min_y = min(grid.keys())

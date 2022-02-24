@@ -5,18 +5,21 @@ from pprint import pprint
 
 import golly as g
 
-import ap
+import apgol
 import util
 
 # better integration for Golly
 import importlib
-importlib.reload(ap)
+importlib.reload(util)
+importlib.reload(apgol)
+
 
 
 GENERATIONS_TO_RUN = 10
 
 
-# TODO rename to UniverseHistory
+# deprecated
+# TO DO rename to UniverseHistory
 class UniverseRecorder:
     def __init__(self):
         self.states = []
@@ -29,101 +32,127 @@ class UniverseRecorder:
         self.states.append(cells)
         self.rects.append(rect)
 
-
-if not len(g.getselrect()):
-    print("Error: No rectangle selected. I can't work like that.")
+        
+def golly_get_sel_values(g, rect):
+    offset_x, offset_y, width, height = rect
+    values = [False] * (width * height)
     
-else:    
-    print()
-    print("####")
-    g.reset()
-    recorder = UniverseRecorder()
+    cells = g.getcells(rect)
+    locations = list(zip(cells[0::2], cells[1::2]))
 
-    print(f"Recording {GENERATIONS_TO_RUN} generations... ", end='')
-    recorder.record()
-    for _ in range(GENERATIONS_TO_RUN):
-        g.step()
-        recorder.record()
-    print("done.")
+    for abs_x, abs_y in locations:
+        index = (abs_x - offset_x) + (abs_y - offset_y) * width
+        values[index] = True
 
+    return values
+    
+    
+def main():
 
-    print("Analyzing...")
-    observer = ap.GliderObserver(recorder)
+    with util.ReportSection("REPORT", glyph='#'):
+        pass
+    
+    with util.ReportSection("Setting up and simulating environment."):
+        g.reset()
+        # recorder = UniverseRecorder()
+        rect = g.getselrect()
 
-    print("Structure classes of the observer:")
-    print(observer.structure_classes)
-
-    structures = {}
-    time1 = 0
-    time2 = 4
-    # times = [time1, time2]
-    times = list(range(time1, time2 + 1))
-    # print(times)
-
-    for time in times:
-        print(f"### Processing time {time}")
+        if not rect:
+            margin = 2
+            r_x, r_y, r_w, r_h = g.getrect()
+            rect = [r_x - margin, r_y - margin, r_w + 2 * margin, r_h + 2 * margin]
+            print("No rectangle selected. Auto-selecting:", rect)
         
-        observer.recognise_all_components(times=[time])
+        env = apgol.GolEnvironment(*rect)
 
-        # print(observer.components['alive'])
-        # print(observer.components['dead'])
-        # input()
-        
-        observer.recognise_all_relations(times=[time])
+        print(f"Recording {GENERATIONS_TO_RUN}+1 generations... ", end='')
+        env.record_values(golly_get_sel_values(g, rect), 0)
+        # recorder.record()
+        for gen in range(GENERATIONS_TO_RUN):
+            g.step()
+            env.record_values(golly_get_sel_values(g, rect), gen + 1)
+            # recorder.record()
+        print("done.")
+        g.reset()
 
-        # print("query")
-        # for kind, rels in observer.relations.items():
-        #     for rel in rels:
-        #         if kind == 'alive-link':
-        #             print(rel)
-        # input()
+    with util.ReportSection("Setting up observer."):
+        observer = apgol.GliderObserver(env)
+        print("Structure classes:", observer.structure_classes.keys())
+
+    with util.ReportSection("Finding structures."):
+        structures = {}
+        time1 = 0
+        time2 = 4
+        # times = [time1, time2]
+        times = list(range(time1, time2 + 1))
+        # print(times)
+
+        for time in times:
+            print(f"Processing time {time}.")
+
+            observer.recognise_all_components(times=[time])
+
+            # print(observer.components['alive'])
+            # print(observer.components['dead'])
+            # input()
+
+            observer.recognise_all_relations(times=[time])
+
+            # print("query")
+            # for kind, rels in observer.relations.items():
+            #     for rel in rels:
+            #         if kind == 'alive-link':
+            #             print(rel)
+            # input()
+
+            structures = observer.find_structures('block', time)
+            structures += observer.find_structures('glider-se-w1', time)
+            structures += observer.find_structures('glider-se-w2', time)
+            structures += observer.find_structures('glider-se-r1', time)
+            structures += observer.find_structures('glider-se-r2', time)
+
+            # print("Found structures:")
+            # for structure in structures:
+            #     print(f"  {structure.kind}")
+
+            print("Component counts:")
+            for key, value in observer.components[time].items():
+                print(f"  {key}: {len(value)}")
+
+            # observer.find_structures('glider', time)
+            # sg = analysis.get_complex_structures('glider', time)
+            # structures[time] = (sa, sd, sg)
+
+            # sa = [x for x in observer.components['alive'] if x.time == time]
+            # sd = [x for x in observer.components['dead'] if x.time == time]
+
+            # print('ALIVE: ', sa)
+            # print('GLIDER:', sd)
+
+            sa = set()
+            sg = set()
+            for structure in structures:
+                for rel in structure.relations:
+                    for comp in (rel.first, rel.second):
+                        if comp.kind == 'alive':
+                            sa.add(comp)
+                        if comp.kind == 'dead':
+                            sg.add(comp)
+
+            # rels = [rel for rel in observer.relations['north-of']
+            #     if rel.first.time == time and
+            #         rel.first.kind == 'alive' and rel.second.kind == 'alive']
+            # pprint(rels)
+
+            util.print_unities({
+                # 'dot': sd,
+                'dotted': sg,
+                'full': sa,
+            })
+
+            # break
             
-        structures = observer.find_structures('block', time)
-        structures += observer.find_structures('glider-se-w1', time)
-        structures += observer.find_structures('glider-se-w2', time)
-        structures += observer.find_structures('glider-se-r1', time)
-        structures += observer.find_structures('glider-se-r2', time)
-
-        # print("Found structures:")
-        # for structure in structures:
-        #     print(f"  {structure.kind}")
-
-        print("Component counts:")
-        for key, value in observer.components[time].items():
-            print(f"  {key}: {len(value)}")
-        
-        # observer.find_structures('glider', time)
-        # sg = analysis.get_complex_structures('glider', time)
-        # structures[time] = (sa, sd, sg)
-
-        # sa = [x for x in observer.components['alive'] if x.time == time]
-        # sd = [x for x in observer.components['dead'] if x.time == time]
-
-        # print('ALIVE: ', sa)
-        # print('GLIDER:', sd)
-
-        sa = set()
-        sg = set()
-        for structure in structures:
-            for rel in structure.relations:
-                for comp in (rel.first, rel.second):
-                    if comp.kind == 'alive':
-                        sa.add(comp)
-                    if comp.kind == 'dead':
-                        sg.add(comp)
-
-        # rels = [rel for rel in observer.relations['north-of']
-        #     if rel.first.time == time and
-        #         rel.first.kind == 'alive' and rel.second.kind == 'alive']
-        # pprint(rels)
-
-        util.print_unities({
-            # 'dot': sd,
-            'dotted': sg,
-            'full': sa,
-        })
-
-        # break
+            return
 
     print("### Analysis")
         
@@ -253,3 +282,7 @@ else:
 
     
     print("done")
+
+
+    
+main()
