@@ -192,6 +192,14 @@ class OrganisationClass(NamedTuple):
 #         pass
 #     def get_at(self, space, time):
 #         pass
+
+
+class Environment:
+    pass
+
+
+class Discrete2DEnvironment(Environment):
+    pass
     
     
 class Observer:
@@ -216,6 +224,8 @@ class Observer:
         self.relation_recognisers = {}
         self.process_recognisers = {}
 
+    def observe(self):
+        pass
 
     def recognise_component(self, kind, space, time):
         """Aka. distinction. 

@@ -45,35 +45,44 @@ def golly_get_sel_values(g, rect):
         values[index] = True
 
     return values
-    
+
+
+def get_simulation_rect(g):
+    rect = g.getselrect()
+    if not rect:
+        margin = 1
+        r_x, r_y, r_w, r_h = g.getrect()
+        rect = [r_x - margin, r_y - margin, r_w + 2 * margin, r_h + 2 * margin]
+        print("No rectangle selected. Auto-selecting:", rect)
+    return rect
+
     
 def main():
 
-    with util.ReportSection("REPORT", glyph='#'):
+    with util.ReportSection("Autopoietic Game of Life", glyph='#'):
         pass
-    
+
     with util.ReportSection("Setting up and simulating environment."):
         g.reset()
-        # recorder = UniverseRecorder()
-        rect = g.getselrect()
+        rect = get_simulation_rect(g)
+        env = apgol.GolEnvironment(g, rect)
+        env.setup()
+        obs = apgol.GolObserver(env)
+        obs.observe()
 
-        if not rect:
-            margin = 2
-            r_x, r_y, r_w, r_h = g.getrect()
-            rect = [r_x - margin, r_y - margin, r_w + 2 * margin, r_h + 2 * margin]
-            print("No rectangle selected. Auto-selecting:", rect)
-        
-        env = apgol.GolEnvironment(*rect)
-
-        print(f"Recording {GENERATIONS_TO_RUN}+1 generations... ", end='')
-        env.record_values(golly_get_sel_values(g, rect), 0)
-        # recorder.record()
         for gen in range(GENERATIONS_TO_RUN):
-            g.step()
-            env.record_values(golly_get_sel_values(g, rect), gen + 1)
-            # recorder.record()
-        print("done.")
-        g.reset()
+            env.simulate_step()
+            obs.observe()
+
+        # print(f"Recording {GENERATIONS_TO_RUN}+1 generations... ", end='')
+        # env.record_values(golly_get_sel_values(g, rect), 0)
+        # # recorder.record()
+        # for gen in range(GENERATIONS_TO_RUN):
+        #     g.step()
+        #     env.record_values(golly_get_sel_values(g, rect), gen + 1)
+        #     # recorder.record()
+        # print("done.")
+        # g.reset()
 
     with util.ReportSection("Setting up observer."):
         observer = apgol.GliderObserver(env)

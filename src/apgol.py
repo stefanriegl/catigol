@@ -1,7 +1,7 @@
 
 from typing import NamedTuple
 from functools import partial
-from itertools import permutations, permutations, product
+from itertools import permutations, combinations, product
 from collections import defaultdict, Counter
 
 import ap
@@ -42,6 +42,9 @@ class GolCell:
     def get_neighbour(self, dx, dy):
         return self._neighbours[self._get_neighbour_index(dx, dy)]
     
+    def get_neighbours(self):
+        return self._neighbours[0:4] + self._neighbours[5:9]
+    
     def set_neighbour(self, neighbour, dx, dy):
         """Only to be used during setup."""
         if dx == 0 and dy == 0:
@@ -63,12 +66,22 @@ class GolCell:
     
 
 # rather GolWorld or GolHistory or GolEnvHist
-class GolEnvironment:
+class GolEnvironment(ap.Discrete2DEnvironment):
 
-    def __init__(self, left, top, width, height):
+    def __init__(self, golly, rect):
+        self._golly = golly
+        left, top, width, height = rect
         self.offset = (left, top)
         self.size = (width, height)
         self._history = []
+
+    def setup(self):
+        self._golly.reset()
+        self._add_history_entry()
+
+    def simulate_step(self):
+        self._golly.step()
+        self._add_history_entry()
                 
     def get_cell(self, location, time):
         ix, iy = location[0] - self.offset[0], location[1] - self.offset[1]
@@ -98,25 +111,39 @@ class GolEnvironment:
                 rect = self._get_cell_rect((ix, iy), size, cells, env_width)
                 yield frozenset(*rect)
     
-    def record_values(self, values, time):
-        width, height = self.size        
-        if len(values) != width * height:
-            raise ValueError("Cannot record values of different number than grid cells.")
+    # def _golly_get_sel_values(self, rect):
+    #     offset_x, offset_y, width, height = rect
+    #     values = [False] * (width * height)
+    #     cells = self._golly.getcells(rect)
+    #     locations = list(zip(cells[0::2], cells[1::2]))
+    #     for abs_x, abs_y in locations:
+    #         index = (abs_x - offset_x) + (abs_y - offset_y) * width
+    #         values[index] = True
+    #     return values
 
+    def _add_history_entry(self):
+        offset_x, offset_y = self.offset
+        width, height = self.size
+        rect = [offset_x, offset_y, width, height]
         grid = []
 
-        for iy in range(height):
-            for ix in range(width):
-                value = values[ix + iy * width]
+        time = self.get_duration()
+        cell_data = self._golly.getcells(rect)
+        alive_cells = list(zip(cell_data[0::2], cell_data[1::2]))
+
+        for y in range(offset_y, offset_y + height):
+            for x in range(offset_x, offset_x + width):
+                #value = values[ix + iy * width]
                 #cell = self._grid[x + y * width]
-                location = Location(self.offset[0] + ix, self.offset[1] + iy)
-                cell = GolCell(location, time, value)
+                #location = Location(self.offset[0] + ix, self.offset[1] + iy)
+                value = ((x, y) in alive_cells)
+                cell = GolCell(Location(x, y), time, value)
                 #cell.set_at(value, time)
                 grid.append(cell)
 
         self._history += grid
-        duration = self.get_duration()
 
+        # TODO merge this into loop above
         for iy in range(height):
             for ix in range(width):
                 cell = grid[ix + iy * width]
@@ -125,14 +152,14 @@ class GolEnvironment:
                     for dx in range(-1, 2):
                         if not dx and not dy:
                             continue
-                        try:                            
-                            neighbour = grid[(ix + dx) + (iy + dy) * width]
-                            cell.set_neighbour(neighbour, dx, dy)
-                        except IndexError:
-                            pass
+                        jx, jy = ix + dx, iy + dy
+                        if jx < 0 or jx >= width or jy < 0 or jy >= height:
+                            continue
+                        neighbour = grid[jx + jy * width]
+                        cell.set_neighbour(neighbour, dx, dy)
 
-                if duration > 0:
-                    index = ix + iy * width + (duration - 1) * width * height
+                if time > 0:
+                    index = ix + iy * width + (time - 1) * width * height
                     ancestor = self._history[index]
                     cell.ancestor = ancestor
                     ancestor.descendant = cell
@@ -142,7 +169,7 @@ class GolEnvironment:
         return len(self._history) // (width * height)
 
 
-class GliderObserver(ap.Observer):
+class GolObserver(ap.Observer):
 
     def __init__(self, environment):
         super().__init__()
@@ -151,15 +178,18 @@ class GliderObserver(ap.Observer):
         
         # component (unity)
         self.component_recognisers = {
-            'alive': self._is_component_alive,
-            'dead': lambda *args: not self._is_component_alive(*args),
-            'glider': self._is_component_glider,
+            #'alive': self._is_component_alive,
+            #'dead': lambda *args: not self._is_component_alive(*args),
+            #'glider': self._is_component_glider,
+            'alive-single': self._is_component_alive,
+            'alive-contingent': self._is_component_alive,
+            'alive-bounded': self._is_component_alive_bounded,
         }
 
         # component relation
         self.relation_recognisers = {
-            'dead-alive-boundary': self._recognise_dead_alive_boundary,
-            'alive-link': self._recognise_alive_link,
+            #'dead-alive-boundary': self._recognise_dead_alive_boundary,
+            'alive-single-link': self._recognise_alive_link,
         }
         self._create_spatial_relation_recognisers()
 
@@ -215,6 +245,80 @@ class GliderObserver(ap.Observer):
 
         # optimisation
         self.component_structures = {}
+
+
+    def observe(self):
+        time = self.environment.get_duration() - 1
+        print("TIME:", time)
+        
+        # single alive cell components
+        cells = self.environment.get_cells(time)
+        for cell in cells:
+            space = {cell}
+            self.recognise_component('alive-single', space, time)
+
+        #print("Single alive cell components:", self.components[time]['alive-single'])
+
+        # links between single alive cell components
+        alive_single_comps = self.components[time]['alive-single']
+        # brute force, but oh well will do for now
+        comp_pairs = combinations(alive_single_comps, 2)
+        for comp1, comp2 in comp_pairs:
+            self.recognise_relation('alive-single-link', comp1, comp2)
+
+        #print("Links between single alive cell components:", self.relations[time]['alive-single-link'])
+
+        # TODO check whether following algo makes more sense via low-level cells-neighbourship instead of relations
+        # contingent alive cell components
+        alive_link_rels = self.relations[time]['alive-single-link']
+        comps_to_check = alive_single_comps.copy()
+        groups = []
+        while comps_to_check:
+            group = []
+            groups.append(group)
+            # deep search
+            comp_agenda = [comps_to_check.pop()]
+            while comp_agenda:
+                comp = comp_agenda.pop()
+                group.append(comp)
+                for rel in alive_link_rels:
+                    if comp == rel.first:
+                        linked_comp = rel.second
+                    elif comp == rel.second:
+                        linked_comp = rel.first
+                    else:
+                        continue
+                    if linked_comp in comps_to_check:
+                        comp_agenda.append(linked_comp)
+                        comps_to_check.remove(linked_comp)
+        # print("groups", groups)
+        # for index, group in enumerate(groups):
+        #     print('GROPU', index + 1)
+        #     for comp in group:
+        #         print(util.set_first(comp.space))
+        # group_spaces = [set.union(*[c.space for c in g]) for g in groups]
+        # print(group_spaces)
+        
+        # contingent alive cell components
+        for group in groups:
+            space = set.union(*[comp.space for comp in group])
+            self.recognise_component('alive-contingent', space, time)
+
+        print("Contingent alive cell components:", self.components[time]['alive-contingent'])
+
+        # FUTURE algo for growing spaces should be somewhere else
+        for comp in self.components[time]['alive-contingent']:
+            space = set(nb for ce in comp.space for nb in ce.get_neighbours())
+            # TODO better merge those components in nested structure?
+            self.recognise_component('alive-bounded', space, time)
+        
+        print("Bounded alive cell components:", self.components[time]['alive-bounded'])
+
+        # From here we consider temporal things.
+        if time == 0:
+            return
+
+        # CONTINUE HERE
 
 
     def recognise_all_components(self, kinds=None, times=None):
@@ -520,13 +624,32 @@ class GliderObserver(ap.Observer):
         return [structure]
         
 
-    def _is_component_alive(self, space, time):
+    # deprecated
+    def _is_component_alive_single(self, space, time):
         if len(space) > 1:
             raise ValueError("Multi-cell alive-query not supported.")
         alive = bool(util.set_first(space).value)
         # alive = bool(space.value)
         return alive
 
+    
+    def _is_component_alive(self, space, time):
+        return all(cell.value for cell in space)
+
+
+    def _is_component_alive_bounded(self, space, time):
+        for component_alive in self.components[time]['alive-contingent']:
+            if not space.issuperset(component_alive.space):
+                continue
+            # comp_alive's space is contained in (arg) space
+            boundary = space - component_alive.space
+            if any(cell.value for cell in boundary):
+                continue
+            # no alive cell in boundary
+            # TODO should check for contingent space here too
+            return True
+        return False
+    
 
     # FUTURE should be automated. any structure could be component
     # for now this only supports "remembering" structures,
@@ -595,6 +718,7 @@ class GliderObserver(ap.Observer):
         return comp1.kind == 'dead' and comp2.kind == 'alive'
 
 
+    # two neighbouring alive single-cell components
     def _recognise_alive_link(self, comp1, comp2):
         if len(comp1.space) != 1 or len(comp2.space) != 1:
             raise ValueError("Non atomic space provided!")
@@ -602,9 +726,11 @@ class GliderObserver(ap.Observer):
             return False
         x1, y1 = util.set_first(comp1.space).location
         x2, y2 = util.set_first(comp2.space).location
+        if x1 == x2 and y1 == y2:
+            return False
         if abs(x2 - x1) > 1 or abs(y2 - y1) > 1:
             return False
-        return comp1.kind == 'alive' and comp2.kind == 'alive'
+        return comp1.kind == 'alive-single' and comp2.kind == 'alive-single'
 
     def _get_neighbourhood_center_component(self, comps):
         pos_x = sum(set_first(c.space)[0] for c in comps) // 9
