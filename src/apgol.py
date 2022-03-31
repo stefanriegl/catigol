@@ -10,6 +10,7 @@ import util
 # Better integration for golly
 import importlib
 importlib.reload(ap)
+importlib.reload(util)
 
 
 

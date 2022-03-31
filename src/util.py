@@ -192,6 +192,8 @@ def write_graph(graph, output_file_path, separate_components=True, do_labels=Tru
             values_y_min = min(values_y)
             if not padding_y:
                 padding_y = 0.2 * (max(values_y) - values_y_min)
+                if not padding_y:
+                    padding_y = 0.1  # dump quick fix
             offset_y = values_y_min - padding_y - max(y for (x, y) in subpos.values())
             # print("O", values_y_min, padding_y, offset_y)
             # for coord in subpos.values():
@@ -214,7 +216,7 @@ def write_graph(graph, output_file_path, separate_components=True, do_labels=Tru
     #     position = set_first(space)
     #     print(f'  {node}: {position}')
 
-    zoom *= 4
+    zoom *= 4 * 3
     plot.figure(figsize=(2 * zoom, 2 * zoom))
 
     # nodes
@@ -245,7 +247,7 @@ def write_graph(graph, output_file_path, separate_components=True, do_labels=Tru
                 if len(space) == 1:
                     position = set_first(data['entity'].space)
                 else:
-                    poss_x, poss_y = zip(*space)
+                    poss_x, poss_y = zip(*(cell.location for cell in space))
                     pos_x = sum(poss_x) / len(poss_x)
                     pos_y = sum(poss_y) / len(poss_y)
                     position = f"({pos_x:.2f}, {pos_y:.2f})"

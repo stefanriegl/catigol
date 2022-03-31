@@ -50,7 +50,7 @@ def golly_get_sel_values(g, rect):
 def get_simulation_rect(g):
     rect = g.getselrect()
     if not rect:
-        margin = 1
+        margin = 2
         r_x, r_y, r_w, r_h = g.getrect()
         rect = [r_x - margin, r_y - margin, r_w + 2 * margin, r_h + 2 * margin]
         print("No rectangle selected. Auto-selecting:", rect)
@@ -72,8 +72,15 @@ def main():
 
         for gen in range(GENERATIONS_TO_RUN):
             env.simulate_step()
+            # FUTURE may include time as parameter here
             obs.observe()
 
+        obs.reflect()
+
+    print()
+    print("STOPPING")
+    return
+            
         # print(f"Recording {GENERATIONS_TO_RUN}+1 generations... ", end='')
         # env.record_values(golly_get_sel_values(g, rect), 0)
         # # recorder.record()
