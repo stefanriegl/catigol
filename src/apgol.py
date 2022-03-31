@@ -249,7 +249,9 @@ class GolObserver(ap.Observer):
 
     def observe(self):
         time = self.environment.get_duration() - 1
-        print("TIME:", time)
+
+        print()
+        print(f"# Observing world at time {time}.")
         
         # single alive cell components
         cells = self.environment.get_cells(time)
@@ -775,7 +777,6 @@ class GolObserver(ap.Observer):
         comp_end = util.set_first(comps_end)
         return comp_start.kind == 'alive' and comp_end.kind == 'dead'
 
-    
     def _recognise_process_block(self, comps_start, comps_end):
         # we're only supporting single-comp to single-comp processes for now
         if len(comps_start) > 1 or len(comps_end) > 1:

@@ -21,11 +21,11 @@ from util import set_first #, make_structure_class
 class Component(NamedTuple):
     """DOC"""
     kind: str
-    space: frozenset[tuple[float]]
+    space: frozenset[tuple[float]]  # typing not up to date anymore
     time: float
     # TODO decide: add field "structure: Structure" here?
     def __repr__(self) -> str:
-        return f'<C {self.kind} l{len(self.space)} t{self.time}>'
+        return f'<C {self.kind} l{len(self.space)} t{self.time}>'        
 
 class ComponentRelation(NamedTuple):
     """DOC"""
