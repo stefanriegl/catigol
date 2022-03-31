@@ -1,7 +1,7 @@
 
 from typing import NamedTuple
 from functools import partial
-from itertools import permutations, combinations, product
+from itertools import permutations, combinations, product, cycle
 from collections import defaultdict, Counter
 
 import ap
@@ -184,6 +184,7 @@ class GolObserver(ap.Observer):
             'alive-single': self._is_component_alive,
             'alive-contingent': self._is_component_alive,
             'alive-bounded': self._is_component_alive_bounded,
+            'alive-bounded-env': self._is_component_alive_bounded_env,
         }
 
         # component relation
@@ -195,12 +196,13 @@ class GolObserver(ap.Observer):
 
         # process
         self.process_recognisers = {
-            'emptiness': self._recognise_process_emptiness,
-            'birth': self._recognise_process_birth,
-            'living': self._recognise_process_living,
-            'death': self._recognise_process_death,
-            'block': self._recognise_process_block,
-            'glider': self._recognise_process_glider,
+            # 'emptiness': self._recognise_process_emptiness,
+            # 'birth': self._recognise_process_birth,
+            # 'living': self._recognise_process_living,
+            # 'death': self._recognise_process_death,
+            # 'block': self._recognise_process_block,
+            # 'glider': self._recognise_process_glider,
+            'bounded-transformation': self._recognise_process_bounded_transformation,
         }
         # self._create_glider_process_recognisers()
 
@@ -306,21 +308,320 @@ class GolObserver(ap.Observer):
             space = set.union(*[comp.space for comp in group])
             self.recognise_component('alive-contingent', space, time)
 
-        print("Contingent alive cell components:", self.components[time]['alive-contingent'])
+        ##print("Contingent alive cell components:", self.components[time]['alive-contingent'])
 
         # FUTURE algo for growing spaces should be somewhere else
         for comp in self.components[time]['alive-contingent']:
-            space = set(nb for ce in comp.space for nb in ce.get_neighbours())
+            space = frozenset(nb for ce in comp.space for nb in ce.get_neighbours())
             # TODO better merge those components in nested structure?
             self.recognise_component('alive-bounded', space, time)
         
-        print("Bounded alive cell components:", self.components[time]['alive-bounded'])
+        ##print("Bounded alive cell components:", self.components[time]['alive-bounded'])
 
-        # From here we consider temporal things.
+        ## FUTURE algo for growing spaces should be somewhere else
+        #for comp in self.components[time]['alive-bounded']:
+        #    space = frozenset(nb for ce in comp.space for nb in ce.get_neighbours())
+        #    # TODO better merge those components in nested structure?
+        #    self.recognise_component('alive-bounded-env', space, time)
+        #
+        #print("Bounded alive cell components with their environment:", self.components[time]['alive-bounded-env'])
+
+        # From here we consider temporal things (that also existed earlier).
         if time == 0:
             return
 
-        # CONTINUE HERE
+        # See whether one of the space of one of this time's bounded components
+        # is included in the space of one of previous time's bounded components.
+        for comp_ab in self.components[time]['alive-bounded']:
+            for comp_abe in self.components[time - 1]['alive-bounded']:
+                comps_start = frozenset([comp_abe])
+                comps_end = frozenset([comp_ab])
+                self.recognise_process('bounded-transformation', comps_start, comps_end)
+
+        procs = self.processes['bounded-transformation']
+        procs = [p for p in procs if util.set_first(p.end).time == time]
+        ##print("Bounded transformation processes:", procs)
+
+        
+    def reflect(self):
+
+        # FIXME incorporate this somehow into observer memory
+
+        #procs = {proc.start: proc for proc in self.processes['bounded-transformation']}
+        #children = {}  # map from node to node list
+        #for proc in procs.values():
+        #    if proc.start in children:
+        #        children[proc.start].append(proc.end)
+        #    else:
+        #        children[proc.start] = [proc.end]
+        #
+        #all_children = [node for nodes in children.values() for node in nodes]
+        #all_parents = children.keys()
+        #parents = {child: parent for (parent, nodes) in children.items() for child in nodes}
+        #leaves = [node for node in all_children if node not in all_parents]
+
+        procs = self.processes['bounded-transformation']
+        nodes = {}  # tuples of lists of processes, {node: ([incoming, ...], [outgoing, ...]), ...}
+
+        # assumes that procs start and end at different times
+        #for proc in procs:
+        #    if proc.start in nodes:
+        #        nodes[proc.start][1].append(proc)
+        #    else:
+        #        nodes[proc.start] = ([], [proc])
+        #    if proc.end in nodes:
+        #        nodes[proc.end][0].append(proc)
+        #    else:
+        #        nodes[proc.end] = ([proc], [])
+
+        # FIXME clean this up, move to better place
+        if True:
+            print("Converting processes to graph...")
+            graph = util.processes_to_graph(procs)
+            if False:
+                image_path = '/tmp/debug.png'
+                print("Drawing graph...")
+                util.write_graph(graph, image_path, separate_components=False, multipartite_layout=True, zoom=1.5)
+                import subprocess
+                print("Displaying graph...")
+                subprocess.run(['kitty', 'icat', image_path])
+            if True:
+                dest_dir = '/tmp/mai-explore'
+                util.write_graph_explorer(graph, dest_dir)
+
+        next_procs = {}  # {proc: [proc, ...]}
+        prev_procs = {}  # {proc: [proc, ...]}
+        for proc_from in procs:
+            for proc_to in procs:
+                if proc_from.end == proc_to.start:
+                    if proc_from in next_procs:
+                        next_procs[proc_from].append(proc_to)
+                    else:
+                        next_procs[proc_from] = [proc_to]
+                    if proc_to in prev_procs:
+                        prev_procs[proc_to].append(proc_from)
+                    else:
+                        prev_procs[proc_to] = [proc_from]
+
+        # for later use
+        #unlinked_procs = [p for p in procs if p not in next_procs and p not in prev_procs]
+        
+        #paths = []
+        #for leaf in leaves:
+        #    node = leaf
+        #    path = []
+        #    while node:
+        #        path.append(node)
+        #        node = parents.get(node, None)
+        #    path = list(reversed(path))
+        #    paths.append(path)
+        
+        #print()
+        #print("Trajectories of connected processes (identity):")
+        #
+        #for path_index, path in enumerate(paths):
+        #    print(f"Path #{path_index + 1}:")
+        #    for index, node in enumerate(path):                
+        #        #print(' ' * (2 * index), node)
+        #        if node in procs:
+        #            print("-", procs[node])
+
+        # deprecated
+        # TODO check whether this is inline with theory and if so move elsewhere
+        # btw, this is madness
+        def is_similar(comp1, comp2):
+            def get_bb_min_max(comp):
+                loc_iter = iter(cell.location for cell in comp.space)
+                loc = next(loc_iter)
+                x_min, x_max, y_min, y_max = loc.x, loc.x, loc.y, loc.y
+                for loc in loc_iter:
+                    if loc.x < x_min: x_min = loc.x
+                    if loc.x > x_max: x_max = loc.x
+                    if loc.y < y_min: y_min = loc.y
+                    if loc.y > y_max: y_max = loc.y
+                return x_min, x_max, y_min, y_max
+            c1x_min, c1x_max, c1y_min, c1y_max = get_bb_min_max(comp1)
+            c2x_min, c2x_max, c2y_min, c2y_max = get_bb_min_max(comp2)
+            c1x_delta, c1y_delta = c1x_max - c1x_min, c1y_max - c1y_min
+            c2x_delta, c2y_delta = c2x_max - c2x_min, c2y_max - c2y_min
+            if c1x_delta != c2x_delta: return False
+            if c1y_delta != c2y_delta: return False
+            values1 = [None] * ((c1x_delta + 1) * (c1y_delta + 1))
+            values2 = [None] * ((c2x_delta + 1) * (c2y_delta + 1))
+            for cell in comp1.space:
+                dx, dy = cell.location.x - c1x_min, cell.location.y - c1y_min
+                index = dy * c1x_delta + dx % c1x_delta
+                values1[index] = cell.value
+            for cell in comp2.space:
+                dx, dy = cell.location.x - c2x_min, cell.location.y - c2y_min
+                index = dy * c2x_delta + dx % c2x_delta
+                values2[index] = cell.value
+            return values1 == values2
+
+        def get_comp_bb_min_max(comp):
+            loc_iter = iter(cell.location for cell in comp.space)
+            loc = next(loc_iter)
+            x_min, x_max, y_min, y_max = loc.x, loc.x, loc.y, loc.y
+            for loc in loc_iter:
+                if loc.x < x_min: x_min = loc.x
+                if loc.x > x_max: x_max = loc.x
+                if loc.y < y_min: y_min = loc.y
+                if loc.y > y_max: y_max = loc.y
+            return x_min, x_max, y_min, y_max
+
+        def get_comp_specs(comp, xy_min_max):
+            x_min, x_max, y_min, y_max = xy_min_max
+            x_delta, y_delta = x_max - x_min, y_max - y_min
+            values = [None] * ((x_delta + 1) * (y_delta + 1))
+            for cell in comp.space:
+                dx, dy = cell.location.x - x_min, cell.location.y - y_min
+                index = dy * x_delta + dx % x_delta
+                values[index] = cell.value
+            return values
+
+        def get_transition_table(value_domain):
+            transition_table = {}
+            value_domain_len = len(value_domain)
+            for index_from, value_from in enumerate(value_domain):
+                for index_to, value_to in enumerate(value_domain):
+                    number = index_to * value_domain_len + index_from
+                    transition_table[(value_from, value_to)] = number
+            return transition_table
+
+        # TODO more elegant way to name and where to put
+        # hard-coded value domain for optimisation
+        transition_table = get_transition_table([None, True, False])
+        
+        # TODO check whether this is inline with theory and if so move elsewhere
+        def get_proc_hash(proc):
+            # FUTURE current assumptions: start end have single comps, t2-t1=1
+            comp1 = util.set_first(proc.start)
+            comp2 = util.set_first(proc.end)
+            c1_xy_min_max = get_comp_bb_min_max(comp1)
+            c2_xy_min_max = get_comp_bb_min_max(comp2)
+            x_mins, x_maxs, y_mins, y_maxs = zip(c1_xy_min_max, c2_xy_min_max)
+            xy_min_max = min(x_mins), max(x_maxs), min(y_mins), max(y_maxs)
+            values1 = get_comp_specs(comp1, xy_min_max)
+            values2 = get_comp_specs(comp2, xy_min_max)
+            transitions = [transition_table[tuple(pair)] for pair in zip(values1, values2)]
+            # hashing could be smarter
+            #return str(transitions)
+            h = hash(tuple(transitions))
+            h = (h + 2**32) % 2**32
+            h = f'{h:08x}'
+            return h
+
+        # TODO alternative network detection algorithm
+        #
+        # ALGO v2: find networks of structures
+        # - issue: requres N+1 processes to detect cycle
+        # - structure-dependency hinges on process-abstraction
+        #
+        # copy all procs into list of uncyclical procs
+        # for each window_size
+        #   get all procs from list for window_size+1
+        #   get connected sub-graphs for given procs
+        #   if start procs equal to end procs
+        #     remember cycle of those procs
+        #     remove procs from list of uncyclical procs
+
+        # all processes that have no or multiple previous proceses
+        traj_starts = [p for p in next_procs if len(next_procs[p]) == 1 and len(prev_procs.get(p, [])) != 1]
+        trajectories = []
+        
+        for traj_start in traj_starts:
+            proc = traj_start
+            traj = []
+            while proc:
+                traj.append(proc)
+                procs = next_procs.get(proc, [])
+                if len(procs) == 1:
+                    proc = procs[0]
+                else:
+                    proc = None
+            trajectories.append(traj)
+
+        proc_hashes = {}  # {proc: proc_hash}
+
+        print("Process trajectories (networks) of identities:")
+        print("SKIPPING OUTPUT")
+        
+        for index_traj, traj in enumerate(trajectories):
+            ##print(f"- Trajectory #{index_traj + 1}")
+            for index_proc, proc in enumerate(traj):
+                proc_hash = get_proc_hash(proc)
+                proc_hashes[proc] = proc_hash
+                ##print(f"  - #{index_proc + 1:02d}: [{proc_hash}] {proc}")
+
+        # TODO a process cycle is a network and an own class is warranted
+        proc_cycles = []
+                
+        print()
+        print("Cycles in process trajectories (networks):")
+
+        print("WARNING: SKIPPING TRAJECTORIES OF LENGTH 2.")
+
+        # helper to make next part syntactically less verbose
+        #musf = lambda p: map(util.set_first, p)
+          
+        for index_traj, traj in enumerate(trajectories):
+            # TODO remove
+            if len(traj) == 2: continue
+            
+            print(f"- Trajectory #{index_traj + 1} (length {len(traj)})")
+            proc_cycle = []
+            cycle_closed = False
+            procs_check = iter(traj)
+            procs_ref = iter(traj)
+            proc_ref = next(procs_ref)
+            for proc_check in procs_check:
+                #if is_similar(node_check, node_ref):
+                if proc_hashes[proc_check] == proc_hashes[proc_ref]:
+                    proc_cycle.append(proc_check)
+                    proc_ref = next(procs_ref, None)
+                    if not proc_ref:
+                        # running out of reference procs to compare with
+                        # TODO restart for loop (/nested) starting with other starting reference proc
+                        # maybe use offsets/indices to get starting reference proc (cf. triangular matrix)
+                        # however, for now this will do. neglecting denerate starting conditions
+                        break
+                    #if is_similar(node_ref, nodes_cycle[0]):
+                    if proc_hashes[proc_ref] == proc_hashes[proc_cycle[0]]:
+                        cycle_closed = True
+                        proc_cycles.append(proc_cycle)
+                        break
+            if cycle_closed:
+                iter_pair = zip(traj, cycle(proc_cycle))
+                #similarities = [is_similar(nc, nr) for (nc, nr) in iter_pair]
+                similarities = [proc_hashes[pc] == proc_hashes[pr] for (pc, pr) in iter_pair]
+                if all(similarities):
+                    print("  - Complete trajectory is cyclical! :)")
+                else:
+                    print("  - Trajectory is only partially cyclical. :/")
+                print(f"  - Cyclical part length is {sum(similarities)}, cycle length is {len(proc_cycle)}.")
+            else:
+                print("  - No cycle found. :(")
+
+        print()
+        print("Process cycles (organisations) found:")
+
+        make_cycle_sig = lambda pc: "-".join(proc_hashes[p] for p in pc)
+        cycle_counter = Counter(make_cycle_sig(pc) for pc in proc_cycles)
+
+        for index, (cycle_signature, count) in enumerate(cycle_counter.items()):
+            print(f"- Cycle #{index + 1}")
+            print(f"  - cycle length: {cycle_signature.count('-') + 1}")
+            print(f"  - occurences: {count}")
+            print(f"  - signature: {cycle_signature}")
+
+        # TODO cleanup the mess above, divide into separate functions
+
+        # TODO frame process cycles as organisations (traj=net)
+        # possibly distinction between as-is process and generalised process is necessary
+
+        # TODO detect cycles not by trajectories, but by moving time windows and graph-component detection
+        # TODO then check far cycles extends over time forward
+        # - generalise cycle to single process / identity and remove from checking-agenda
 
 
     def recognise_all_components(self, kinds=None, times=None):
@@ -653,6 +954,16 @@ class GolObserver(ap.Observer):
         return False
     
 
+    # FUTURE merge with above somehow
+    def _is_component_alive_bounded_env(self, space, time):
+        for component_alive in self.components[time]['alive-bounded']:
+            if not space.issuperset(component_alive.space):
+                continue
+            # TODO should check for contingent space here too
+            return True
+        return False
+    
+
     # FUTURE should be automated. any structure could be component
     # for now this only supports "remembering" structures,
     # but not detecting by analysing a random space-time
@@ -802,4 +1113,24 @@ class GolObserver(ap.Observer):
         key = key_start + key_end
         intersection = comp_start.space.intersection(comp_end.space)
         return key in 'r1w2r2w1r1' and len(intersection) in (18, 20)
+    
+
+    def _recognise_process_bounded_transformation(self, comps_start, comps_end):
+        # we're only supporting single-comp to single-comp processes for now
+        if len(comps_start) > 1 or len(comps_end) > 1:
+            return False
+        comp_start = util.set_first(comps_start)
+        comp_end = util.set_first(comps_end)
+        # FIXME the attribute "space" is actually a "spacetime", but shouldn't be.
+        # Get the space out of that spacetime, so we can do set operations.
+        comp_start_space = {cell.location for cell in comp_start.space}
+        comp_end_space = {cell.location for cell in comp_end.space}
+        # Grow the starting space so it may contain the end space.
+        # TODO fix this for edge cases where comps are only 1 unit width/height
+        comp_start_space_ext = {nb.location for ce in comp_start.space for nb in ce.get_neighbours()}
+        # TODO check whether this symmetric approach really makes sense! :o
+        comp_end_space_ext = {nb.location for ce in comp_end.space for nb in ce.get_neighbours()}
+        end_in_start = comp_start_space_ext.issuperset(comp_end_space)
+        start_in_end = comp_end_space_ext.issuperset(comp_start_space)
+        return end_in_start or start_in_end
     
