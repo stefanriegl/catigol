@@ -1,6 +1,9 @@
 
 from collections import defaultdict
 from itertools import product
+from shutil import copy as shutil_copy
+import os.path
+from json import dumps as json_dumps
 
 #from ap import StructureClass, ComponentRelationConstraint
 
@@ -314,3 +317,81 @@ def group_overlapping_processes(processes):
                             processes_left.remove(proc_comp)
                             processes_agenda.append(proc_comp)
     return groups
+
+
+def write_graph_explorer(graph, dest_dir):
+    if not os.path.exists(dest_dir):
+        os.mkdir(dest_dir)
+    index_path = f'{dest_dir}/index.html'
+    #if not os.path.exists(index_path):
+    script_dir = os.path.dirname(__file__)
+    shutil_copy(f'{script_dir}/explorer.html', index_path)
+
+    #node_groups = {
+    #    'component': 1,
+    #    'process': 2,
+    #}
+    #node_group_default = 0
+    comps_data = [d for (_, d) in graph.nodes(data=True) if d['category'] == 'component']
+    time_max = max(d['time'] for d in comps_data)
+
+    # TODO inefficient, optimise
+    locs = [ce.location for d in comps_data for ce in d['entity'].space]
+    min_x = min(loc.x for loc in locs)
+    max_x = max(loc.x for loc in locs)
+    min_y = min(loc.y for loc in locs)
+    max_y = max(loc.y for loc in locs)
+
+    # TODO quick and dirty hack, move to better place
+    def format_id(text):
+        #text = text.replace('bounded-transformation', 'bt')
+        #text = text.replace('alive-bounded', 'ab')
+        tokens = text.split('-')
+        abbr = ''.join(t[0] for t in tokens[:-1])
+        text = f"{abbr}-{tokens[-1]}"
+        return text
+    
+    def gen_node(node, data):
+        #group = node_groups.get(data['category'], node_group_default)
+        assert data['category'] in ('process', 'component')
+        if data['category'] == 'process':
+            proc = data['entity']
+            comps = frozenset.union(proc.start, proc.end)
+            space = frozenset.union(*(comp.space for comp in comps))
+        else:
+            space = data['entity'].space
+        cells_count = len(space)
+        center_x = sum(ce.location.x for ce in space) / cells_count
+        center_y = sum(ce.location.y for ce in space) / cells_count
+        return {
+            'id': format_id(node),
+            #'group': group
+            'category': data['category'],
+            'time': data['time'] / time_max,
+            'center': {
+                'x': (center_x - min_x) / (max_x - min_x),
+                'y': (center_y - min_y) / (max_y - min_y),
+            }
+        }
+
+    def gen_edge(node1, node2):
+        return {
+            'source': format_id(node1),
+            'target': format_id(node2),
+            'value': 1,
+        }
+        
+    data = {}
+    data['nodes'] = [gen_node(n, d) for n, d in graph.nodes(data=True)]
+    data['links'] = [gen_edge(n1, n2) for n1, n2 in graph.edges()]
+
+    for time in (0.0, 1.0):
+        nodes_time = [n for n in data['nodes'] if n['time'] == time]
+        nodes_count = len(nodes_time)
+        if nodes_count > 0:
+            nodes_sorted = sorted(nodes_time, key=lambda n: n['center']['y'])
+            for index, node in enumerate(nodes_sorted):
+                node['ratio_y'] = index / (nodes_count - 1)
+        
+    with open(f'{dest_dir}/data.json', 'w') as f:
+        f.write(json_dumps(data))
