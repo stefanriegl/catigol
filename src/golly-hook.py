@@ -15,7 +15,9 @@ importlib.reload(apgol)
 
 
 
-GENERATIONS_TO_RUN = 10
+#GENERATIONS_TO_RUN = 6
+GENERATIONS_TO_RUN = 35
+#GENERATIONS_TO_RUN = 135
 
 
 # deprecated

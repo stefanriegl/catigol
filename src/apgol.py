@@ -542,17 +542,13 @@ class GolObserver(ap.Observer):
                     proc = None
             trajectories.append(traj)
 
-        proc_hashes = {}  # {proc: proc_hash}
-
         print("Process trajectories (networks) of identities:")
         print("SKIPPING OUTPUT")
         
-        for index_traj, traj in enumerate(trajectories):
-            ##print(f"- Trajectory #{index_traj + 1}")
-            for index_proc, proc in enumerate(traj):
-                proc_hash = get_proc_hash(proc)
-                proc_hashes[proc] = proc_hash
-                ##print(f"  - #{index_proc + 1:02d}: [{proc_hash}] {proc}")
+        #for index_traj, traj in enumerate(trajectories):
+        #    print(f"- Trajectory #{index_traj + 1}")
+        #    for index_proc, proc in enumerate(traj):
+        #        print(f"  - #{index_proc + 1:02d}: [{proc_hashes[proc]}] {proc}")
 
         # TODO a process cycle is a network and an own class is warranted
         proc_cycles = []
