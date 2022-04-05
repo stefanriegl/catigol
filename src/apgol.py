@@ -492,6 +492,12 @@ class GolObserver(ap.Observer):
         # TODO more elegant way to name and where to put
         # hard-coded value domain for optimisation
         transition_table = get_transition_table([None, True, False])
+
+        def better_hash(obj):
+            h = hash(obj)
+            h = (h + 2**32) % 2**32
+            h = f'{h:08x}'
+            return h
         
         # TODO check whether this is inline with theory and if so move elsewhere
         def get_proc_hash(proc):
@@ -507,15 +513,14 @@ class GolObserver(ap.Observer):
             transitions = [transition_table[tuple(pair)] for pair in zip(values1, values2)]
             # hashing could be smarter
             #return str(transitions)
-            h = hash(tuple(transitions))
-            h = (h + 2**32) % 2**32
-            h = f'{h:08x}'
-            return h
+            return better_hash(tuple(transitions))
 
         # TODO alternative network detection algorithm
         #
         # ALGO v2: find networks of structures
-        # - issue: requres N+1 processes to detect cycle
+        # - process relations segments is one unit of cycle
+        #   - detect repeating NxM process-dependencies
+        # - requres deltaT+1 duration of processes to detect cycle
         # - structure-dependency hinges on process-abstraction
         #
         # copy all procs into list of uncyclical procs
@@ -523,8 +528,182 @@ class GolObserver(ap.Observer):
         #   get all procs from list for window_size+1
         #   get connected sub-graphs for given procs
         #   if start procs equal to end procs
-        #     remember cycle of those procs
-        #     remove procs from list of uncyclical procs
+        #     detect maximum stretch of cycle repetitions
+        #     remember cycle and stretch
+        #     remove procs of stretch from list of uncyclical procs
+            
+        def get_procs_in_window(start, end, procs):
+            for proc in procs:
+                if not all(comp.time >= start for comp in proc.start): continue
+                if not all(comp.time <= end for comp in proc.end): continue
+                yield proc            
+
+        # based on https://stackoverflow.com/a/13837045/8952900
+        def get_connected_graph_components(neighbors):
+            seen = set()
+            def component(node):
+                nodes = set([node])
+                while nodes:
+                    node = nodes.pop()
+                    seen.add(node)
+                    nodes |= neighbors[node] - seen
+                    yield node
+            for node in neighbors:
+                if node not in seen:
+                    yield component(node)
+
+        #def get_segment_signature(procs_from, procs_to, next_procs):
+        #    # there might be more efficient ways than this
+        #    # adjacency-matrix-based solutions?
+        #    proc_segment = {proc_hashes[pf]: tuple(proc_hashes[pt] for pt in next_procs[pf] if pt in procs_to) for pf in procs_from}
+        #    sig = better_hash(tuple(proc_segment.items()))
+        #    return sig
+
+        def get_proc_rel_hash(proc, next_procs):
+            proc_hash = proc_hashes[proc]
+            next_procs_hashes = '+'.join(proc_hashes[p] for p in next_procs.get(proc, []))
+            return f'{proc_hash}-{next_procs_hashes}'
+
+        proc_hashes = {p: get_proc_hash(p) for p in procs}
+
+        print()
+        print("Searching for cyclical networks")
+
+        # TODO assume processes that only have start/end comps at the same time
+        assert all(len({co.time for co in p.start}) == 1 for p in procs)
+        assert all(len({co.time for co in p.end}) == 1 for p in procs)
+        # TODO assume all processes stretch only over one unit of time
+        assert all(util.set_first(p.end).time - util.set_first(p.start).time == 1 for p in procs)
+                    
+        last_env_time = self.environment.get_duration()
+        # TODO parameterise window size / cycle size / "working memory"
+        working_memory_duration = 33
+        window_sizes = list(range(2, min(working_memory_duration, last_env_time)))
+        unexplained_procs = procs.copy()
+
+        # e.g. a window with size 2 spans over processes at three different times,
+        # i.e. one segment (lasting one time unit), capturing 0-* process relationships
+        #
+        # e.g. window size 3, window start 2 -> times [2, 3, 4, 5] since 5-2=3
+        # i.e. 4 sets of components (unused), 3 sets of processes, 2 sets of process relations (segments)
+        for window_size in window_sizes:
+            print(f"- Cyles of length {window_size - 1}")
+            # TODO inner loops should be own function
+
+            # last_env_time is also a valid time
+            # because window_size refers to the interval of times, another +1
+            for window_start in range(0, last_env_time - (window_size + 1)):
+                window_end = window_start + window_size
+                procs_window = tuple(get_procs_in_window(window_start, window_end, unexplained_procs))
+                # could be optimised
+                #next_procs_window = {p: frozenset(next_procs.get(p, [])) for p in procs_window}
+                #prev_procs_window = {p: prev_procs[p] for p in procs_window}
+                get_links_for = lambda pf: frozenset(pt for pt in next_procs.get(pf, []) + prev_procs.get(pf, []) if pt in procs_window)
+                proc_links_window = {pf: get_links_for(pf) for pf in procs_window}
+                window_networks = tuple(tuple(s) for s in get_connected_graph_components(proc_links_window))
+                #print(f"  - Window {window_start}-{window_end}: Found {len(procs_window)} processes in {len(window_networks)} connected graph components.")
+                #util.debug_draw_graph(proc_links_window, f'proc_links_window.wl{window_size}.ws{window_start}')
+
+                #for proc in procs_window:
+                #    print(f"    - {proc}")
+
+                # We have networks (connected graph components) within that time window now.
+                # When the window_size is N, the networks have an edge depth of (at most) N-1.
+
+                for network_index, window_network in enumerate(window_networks):
+                    net_procs = list(window_network)
+                    net_segments = {}  # {int: [proc]}
+                    for net_proc in net_procs:
+                        time = util.set_first(net_proc.start).time
+                        if time in net_segments:
+                            net_segments[time].add(net_proc)
+                        else:
+                            net_segments[time] = {net_proc}
+
+                    # A segment is a list of processes for a given interval ("slice"),
+                    # based on a given network (i.e. a connected graph component).
+                    # Here the interval is referred to by its starting time.
+                    
+                    # When the window_size is N, there are (at most) N segments.
+                    #print(f"    - Segment count is {len(net_segments)}.")
+
+                    # Ignore cases when ends of networks only pertrude a little into the window.
+                    # We need at least two segments, otherwise things break.
+                    if len(net_segments) == 1:
+                        # TODO check again this makes sense
+                        #print(f"    - Found network with segment count of 1, skipping. (win:{window_start}-{window_end})")
+                        continue
+                    
+                    # this may break when processes have multiple start/end comps at different times
+                    #net_procs_start = [p for p in net_procs if util.set_first(p.start).time == window_start]
+                    #net_procs_end = [p for p in net_procs if util.set_first(p.end).time == window_end]
+                    net_procs_start = net_segments[min(net_segments)]
+                    net_procs_end = net_segments[max(net_segments)]
+                    # advance by one time unit, because we are going to compare
+                    # the two sets of hashes for process _relations_
+                    #net_procs_end = {pt for pf in net_procs_end for pt in next_procs.get(pf, [])}
+
+                    # TODO this is brittle. generally a smarter pattern matching algo would make sense
+                    hashes_start = sorted(proc_hashes[p] for p in net_procs_start)
+                    hashes_end = sorted(proc_hashes[p] for p in net_procs_end)
+
+                    # TODO re-evaluate this. is this a good way to check for cycles?
+                    if hashes_start == hashes_end:
+                        # cycle found!
+                        hashes_str = '--'.join('/'.join(sorted(proc_hashes[p] for p in net_segments[nsi])) for nsi in sorted(net_segments))
+                        print(f"    - Found cycle: {hashes_str}")
+                        #print(f"      - Start processes: {net_procs_start}")
+                        #print(f"      - End processes:   {net_procs_end}")
+
+                        if True:  # debug info output
+                            get_links = lambda pf: {proc_hashes[pt] for pt in next_procs.get(pf, [])}
+                            graph_dict = {proc_hashes[pf]: get_links(pf) for pf in window_network}
+                            if False:
+                                print("CONN")
+                                for p in graph_dict:
+                                    print(" ", p, graph_dict[p])
+                            filename = f'connected_comps.wl{window_size}.ws{window_start}.ni{network_index}'
+                            util.debug_draw_graph(graph_dict, filename, verbose=False)
+                        
+                        for proc in net_procs:
+                            try:
+                                unexplained_procs.remove(proc)
+                            except ValueError:
+                                #print("Warning in outer loop, cannot remove:", proc)
+                                pass
+                        
+                        # let's see how far the cycle extends into the future
+                        identity_lifetime = window_size
+                        procs_cycle = net_procs_start.copy()
+                        procs_world = net_procs_end.copy()
+
+                        while procs_cycle and procs_world:
+                            # TODO cache hashes for cycle! :C
+                            hashes_cycle = sorted(get_proc_rel_hash(p, next_procs) for p in procs_cycle)
+                            hashes_world = sorted(get_proc_rel_hash(p, next_procs) for p in procs_world)
+
+                            if hashes_cycle != hashes_world:
+                                break
+
+                            for proc in procs_world:
+                                try:
+                                    unexplained_procs.remove(proc)
+                                except ValueError:
+                                    #print("Warning in inner loop, cannot remove:", proc)
+                                    pass
+
+                            identity_lifetime += 1
+                            procs_cycle = {pt for pf in procs_cycle for pt in next_procs.get(pf, [])}
+                            procs_world = {pt for pf in procs_world for pt in next_procs.get(pf, [])}
+
+                        print(f"      - Identity extends over {identity_lifetime} time units.")
+                    
+                    #net_seg_sigs = [get_segment_signature(net_procs[t], net_procs[t + 1], next_procs) for t in range(len(net_segments) - 1)]
+                    # len(net_seg_sigs) == window_size
+
+        print()
+        print("CONTROLLED STOP OF reflect()")
+        return
 
         # all processes that have no or multiple previous proceses
         traj_starts = [p for p in next_procs if len(next_procs[p]) == 1 and len(prev_procs.get(p, [])) != 1]
