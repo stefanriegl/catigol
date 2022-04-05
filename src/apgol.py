@@ -253,7 +253,7 @@ class GolObserver(ap.Observer):
     def observe(self):
         time = self.environment.get_duration() - 1
 
-        print()
+        #print()
         print(f"# Observing world at time {time}.")
         
         # single alive cell components
@@ -309,7 +309,7 @@ class GolObserver(ap.Observer):
             space = set.union(*[comp.space for comp in group])
             self.recognise_component('alive-contingent', space, time)
 
-        ##print("Contingent alive cell components:", self.components[time]['alive-contingent'])
+        #print("Contingent alive cell components:", self.components[time]['alive-contingent'])
 
         # FUTURE algo for growing spaces should be somewhere else
         for comp in self.components[time]['alive-contingent']:
@@ -341,7 +341,7 @@ class GolObserver(ap.Observer):
 
         procs = self.processes['bounded-transformation']
         procs = [p for p in procs if util.set_first(p.end).time == time]
-        ##print("Bounded transformation processes:", procs)
+        #print("Bounded transformation processes:", procs)
 
         
     def reflect(self):
