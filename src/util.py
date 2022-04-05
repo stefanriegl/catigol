@@ -4,6 +4,7 @@ from itertools import product
 from shutil import copy as shutil_copy
 import os.path
 from json import dumps as json_dumps
+from subprocess import run as subprocess_run
 
 #from ap import StructureClass, ComponentRelationConstraint
 
@@ -269,6 +270,45 @@ def write_graph(graph, output_file_path, separate_components=True, do_labels=Tru
     # plot.show()
     plot.close('all')
 
+
+def debug_draw_graph(graph_dict, filename_base, verbose=True):
+    #edge_args = 'color="grey", penwidth=3.0'
+    edge_args = ''
+
+    all_nodes = frozenset([n for ns in graph_dict.values() for n in ns] + list(graph_dict.keys()))
+    nids = {n: i for (i, n) in enumerate(all_nodes)}
+    graph_edges = [(n1, n2) for (n1, ns) in graph_dict.items() for n2 in ns]
+
+    def get_node_props(obj):
+        if type(obj) == str:
+            label = obj
+        else:
+            label = repr(obj).replace(' frozenset', '\nfs')
+        props = []
+        props.append(f'label="{label}"')
+        #props.append(f'pos="{pos_x},{pos_y}"')
+        return ', '.join(props)
+
+    nodes_str = '\n'.join(f'{nids[n]} [ {get_node_props(n)} ];' for n in all_nodes)
+    edges_str = '\n'.join(f'{nids[n1]} -> {nids[n2]} [ {edge_args} ];' for (n1, n2) in graph_edges)
+    graph_str = f'digraph {{ rankdir=TB;\n{nodes_str}\n{edges_str}\n}}'
+    
+    out_path = f'/tmp/mai-debug/{filename_base}.png'
+    args = ['/usr/bin/dot', '-Tpng', f'-o{out_path}']
+
+    if verbose:
+        print(f"Writing debug graph '{filename_base}'... ", end='')
+
+    #print(graph_str)
+    proc = subprocess_run(args, text=True, input=graph_str, capture_output=True)
+
+    if verbose:
+        if proc.returncode:
+            print(f"error {proc.returncode}.")
+            for line in proc.stderr.split('\n'):
+                print(line)
+        else:
+            print("done.")
 
 # def write_graph(edges, output_file_path):
 # #  orientation="landscape"
