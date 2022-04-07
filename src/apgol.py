@@ -43,8 +43,11 @@ class GolCell:
     def get_neighbour(self, dx, dy):
         return self._neighbours[self._get_neighbour_index(dx, dy)]
     
-    def get_neighbours(self):
-        return self._neighbours[0:4] + self._neighbours[5:9]
+    def get_neighbours(self, include_empty=False):
+        neighbours = self._neighbours[0:4] + self._neighbours[5:9]
+        if not include_empty:
+            neighbours = [nb for nb in neighbours if nb]
+        return neighbours
     
     def set_neighbour(self, neighbour, dx, dy):
         """Only to be used during setup."""
@@ -253,7 +256,7 @@ class GolObserver(ap.Observer):
     def observe(self):
         time = self.environment.get_duration() - 1
 
-        #print()
+        print()
         print(f"# Observing world at time {time}.")
         
         # single alive cell components
@@ -1249,6 +1252,7 @@ class GolObserver(ap.Observer):
         return False
     
 
+    # deprecated? ig
     # FUTURE merge with above somehow
     def _is_component_alive_bounded_env(self, space, time):
         for component_alive in self.components[time]['alive-bounded']:

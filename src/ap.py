@@ -25,7 +25,7 @@ class Component(NamedTuple):
     time: float
     # TODO decide: add field "structure: Structure" here?
     def __repr__(self) -> str:
-        return f'<C {self.kind} l{len(self.space)} t{self.time}>'        
+        return f'<C {self.kind} s{len(self.space)} t{self.time}>'        
 
 class ComponentRelation(NamedTuple):
     """DOC"""
@@ -59,7 +59,9 @@ class Process(NamedTuple):
     start: frozenset[Component]
     end: frozenset[Component]
     def __repr__(self) -> str:
-        return f'<P {self.kind} {self.start} {self.end}>'
+        start_str = ", ".join(repr(co) for co in self.start)
+        end_str = ", ".join(repr(co) for co in self.end)
+        return f'<P {self.kind} {{{start_str}}} {{{end_str}}}>'
 
 class ProcessRelation(NamedTuple):
     """DOC"""
