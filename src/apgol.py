@@ -306,16 +306,19 @@ class GolObserver(ap.Observer):
         
         # contingent alive cell components
         for group in groups:
-            space = set.union(*[comp.space for comp in group])
+            space = frozenset(set.union(*[comp.space for comp in group]))
             self.recognise_component('alive-contingent', space, time)
 
-        #print("Contingent alive cell components:", self.components[time]['alive-contingent'])
+        if True:  # output
+            print("Contingent alive cell components:")
+            for comp in self.components[time]['alive-contingent']:
+                print(f"- {comp}")
 
         # FUTURE algo for growing spaces should be somewhere else
         for comp in self.components[time]['alive-contingent']:
             space = frozenset(nb for ce in comp.space for nb in ce.get_neighbours())
             # TODO better merge those components in nested structure?
-            self.recognise_component('alive-bounded', space, time)
+            proc = self.recognise_component('alive-bounded', space, time)
         
         ##print("Bounded alive cell components:", self.components[time]['alive-bounded'])
 
@@ -333,19 +336,79 @@ class GolObserver(ap.Observer):
 
         # See whether one of the space of one of this time's bounded components
         # is included in the space of one of previous time's bounded components.
-        for comp_ab in self.components[time]['alive-bounded']:
-            for comp_abe in self.components[time - 1]['alive-bounded']:
-                comps_start = frozenset([comp_abe])
-                comps_end = frozenset([comp_ab])
-                self.recognise_process('bounded-transformation', comps_start, comps_end)
+        #for comp_ab in self.components[time]['alive-bounded']:
+        #    for comp_abe in self.components[time - 1]['alive-bounded']:
+        #        comps_start = frozenset([comp_abe])
+        #        comps_end = frozenset([comp_ab])
+        #        self.recognise_process('bounded-transformation', comps_start, comps_end)
 
-        procs = self.processes['bounded-transformation']
-        procs = [p for p in procs if util.set_first(p.end).time == time]
-        #print("Bounded transformation processes:", procs)
+        comps_start = self.components[time - 1]['alive-contingent'].copy()
+        comps_end = self.components[time]['alive-contingent'].copy()
 
+        # ALGO idea: Start with one component at time t1, then find all
+        # components at time t2 that match the space of selected components at
+        # at time t1, then repeat with t1 and t2 swapped. Stop after no set of
+        # components could be extended.
         
+        # while there are still unconsidered components
+        while comps_start:
+            proc_comps_start = [comps_start.pop()]
+            proc_comps_end = []
+            space_was_extended = True
+
+            while space_was_extended:
+
+                space_was_extended = False
+                space_proc_start = {nb.location for co in proc_comps_start for ce in co.space for nb in ce.get_neighbours()}
+
+                # find matching processes for start components
+                for comp_end in comps_end:
+                    space_comp_end = {ce.location for ce in comp_end.space}
+                    if not space_proc_start.isdisjoint(space_comp_end):
+                        proc_comps_end.append(comp_end)
+                        comps_end.remove(comp_end)
+                        space_was_extended = True
+
+                # could be optimised by on-the-fly updating in loop above
+                space_proc_end = {ce.location for co in proc_comps_end for ce in co.space}
+
+                for comp_start in comps_start:
+                    space_comp_start = {nb.location for ce in comp_start.space for nb in ce.get_neighbours()}
+                    if not space_comp_start.isdisjoint(space_proc_end):
+                        proc_comps_start.append(comp_start)
+                        comps_start.remove(comp_start)                
+                        space_was_extended = True
+
+            self.recognise_process('bounded-transformation', frozenset(proc_comps_start), frozenset(proc_comps_end))
+
+        if False:  # output
+            procs = self.processes['bounded-transformation']
+            # for all processes, all components at the end have the same time (if there are components)
+            assert all(len({ce.time for ce in p.end}) <= 1 for p in procs)
+            procs = [p for p in procs if p.end and util.set_first(p.end).time == time]
+            print("Bounded transformation processes:")
+            for proc in procs:
+                print(f"- {proc}")
+
+        if True:  # output
+            procs = self.processes['bounded-transformation']
+            procs = [p for p in procs if not p.end or not p.start]
+            if procs:
+                if False:
+                    print("Destructive processes:")
+                    for proc in procs:
+                        print(f"- {proc}")
+                else:
+                    print(f"Destructive processes: {len(procs)}")
+            else:
+                print("No destructive processes.")
+
+                
     def reflect(self):
 
+        print()
+        print("Reflection.")
+        
         # FIXME incorporate this somehow into observer memory
 
         #procs = {proc.start: proc for proc in self.processes['bounded-transformation']}
@@ -394,7 +457,7 @@ class GolObserver(ap.Observer):
         prev_procs = {}  # {proc: [proc, ...]}
         for proc_from in procs:
             for proc_to in procs:
-                if proc_from.end == proc_to.start:
+                if not proc_from.end.isdisjoint(proc_to.start):
                     if proc_from in next_procs:
                         next_procs[proc_from].append(proc_to)
                     else:
@@ -459,8 +522,8 @@ class GolObserver(ap.Observer):
                 values2[index] = cell.value
             return values1 == values2
 
-        def get_comp_bb_min_max(comp):
-            loc_iter = iter(cell.location for cell in comp.space)
+        def get_space_bb(space):
+            loc_iter = iter(cell.location for cell in space)
             loc = next(loc_iter)
             x_min, x_max, y_min, y_max = loc.x, loc.x, loc.y, loc.y
             for loc in loc_iter:
@@ -470,13 +533,14 @@ class GolObserver(ap.Observer):
                 if loc.y > y_max: y_max = loc.y
             return x_min, x_max, y_min, y_max
 
-        def get_comp_specs(comp, xy_min_max):
+        def get_space_values(space, xy_min_max):
             x_min, x_max, y_min, y_max = xy_min_max
             x_delta, y_delta = x_max - x_min, y_max - y_min
             values = [None] * ((x_delta + 1) * (y_delta + 1))
-            for cell in comp.space:
+            width = x_delta if x_delta > 0 else 1
+            for cell in space:
                 dx, dy = cell.location.x - x_min, cell.location.y - y_min
-                index = dy * x_delta + dx % x_delta
+                index = dy * width + dx % width
                 values[index] = cell.value
             return values
 
@@ -501,15 +565,22 @@ class GolObserver(ap.Observer):
         
         # TODO check whether this is inline with theory and if so move elsewhere
         def get_proc_hash(proc):
-            # FUTURE current assumptions: start end have single comps, t2-t1=1
-            comp1 = util.set_first(proc.start)
-            comp2 = util.set_first(proc.end)
-            c1_xy_min_max = get_comp_bb_min_max(comp1)
-            c2_xy_min_max = get_comp_bb_min_max(comp2)
-            x_mins, x_maxs, y_mins, y_maxs = zip(c1_xy_min_max, c2_xy_min_max)
-            xy_min_max = min(x_mins), max(x_maxs), min(y_mins), max(y_maxs)
-            values1 = get_comp_specs(comp1, xy_min_max)
-            values2 = get_comp_specs(comp2, xy_min_max)
+            # FUTURE review current assumptions: t2-t1=1
+            comps1_space = frozenset.union(*(co.space for co in proc.start))
+            c1_xy_min_max = get_space_bb(comps1_space)
+
+            if proc.end:
+                comps2_space = frozenset.union(*(co.space for co in proc.end))
+                c2_xy_min_max = get_space_bb(comps2_space)
+                x_mins, x_maxs, y_mins, y_maxs = zip(c1_xy_min_max, c2_xy_min_max)
+                xy_min_max = min(x_mins), max(x_maxs), min(y_mins), max(y_maxs)
+                values2 = get_space_values(comps2_space, xy_min_max)
+            else:
+                x_min, x_max, y_min, y_max = c1_xy_min_max
+                values2 = [None] * ((x_max - x_min) * (y_max - y_min))
+                xy_min_max = c1_xy_min_max
+
+            values1 = get_space_values(comps1_space, xy_min_max)
             transitions = [transition_table[tuple(pair)] for pair in zip(values1, values2)]
             # hashing could be smarter
             #return str(transitions)
@@ -569,11 +640,14 @@ class GolObserver(ap.Observer):
         print()
         print("Searching for cyclical networks")
 
-        # TODO assume processes that only have start/end comps at the same time
-        assert all(len({co.time for co in p.start}) == 1 for p in procs)
-        assert all(len({co.time for co in p.end}) == 1 for p in procs)
+        # assume processes that only have start/end comps at the same time
+        #assert all(len({co.time for co in p.start}) == 1 for p in procs)
+        #assert all(len({co.time for co in p.end}) == 1 for p in procs)
+        # for all procs all start and end comps have the same time
+        assert all(len({ce.time for ce in p.start}) <= 1 for p in procs)
+        assert all(len({ce.time for ce in p.end}) <= 1 for p in procs)
         # TODO assume all processes stretch only over one unit of time
-        assert all(util.set_first(p.end).time - util.set_first(p.start).time == 1 for p in procs)
+        assert all(not p.end or util.set_first(p.end).time - util.set_first(p.start).time == 1 for p in procs)
                     
         last_env_time = self.environment.get_duration()
         # TODO parameterise window size / cycle size / "working memory"
@@ -1292,6 +1366,12 @@ class GolObserver(ap.Observer):
     
 
     def _recognise_process_bounded_transformation(self, comps_start, comps_end):
+        cells_start_ext = {nb.location for co in comps_start for ce in co.space for nb in ce.get_neighbours()}
+        cells_end = {ce.location for co in comps_end for ce in co.space}
+        return cells_start_ext.issuperset(cells_end)
+
+        
+    def _recognise_process_bounded_transformation_old(self, comps_start, comps_end):
         # we're only supporting single-comp to single-comp processes for now
         if len(comps_start) > 1 or len(comps_end) > 1:
             return False

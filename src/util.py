@@ -35,7 +35,8 @@ class ReportSection:
 def set_first(s):
     for e in s:
         return e
-    return None
+    #return None
+    raise ValueError("Empty set!")
 
 
 # FUTURE naming of variables
@@ -122,13 +123,17 @@ def pattern_mirror_y(pattern):
     return list(reversed(pattern))
 
 
-def processes_to_graph(processes):
+def get_comps_and_procs_graph(processes):
     graph = nx.DiGraph()
     component_names = {}
 
     for index, process in enumerate(processes):
+
+        time_start = max(c.time for c in process.start)
+        time_end = min(c.time for c in process.end) if process.end else time_start + 1
+        time = (time_start + time_end) / 2
+
         process_name = f'{process.kind}-p{index + 1}'
-        time = (max(c.time for c in process.start) + min(c.time for c in process.end)) / 2
         graph.add_node(process_name, category='process', time=time, entity=process, index=index)
         
         for components, start in ((process.start, True), (process.end, False)):
