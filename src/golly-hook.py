@@ -2,6 +2,7 @@
 
 from collections import defaultdict, Counter
 from pprint import pprint
+import threading
 
 import golly as g
 
@@ -302,5 +303,25 @@ def main():
     print("done")
 
 
-    
+def wait_for_threads():
+    main_thread = threading.main_thread()
+    all_threads = threading.enumerate()
+    other_threads = [t for t in all_threads if t != main_thread and t.is_alive()]
+
+    if not other_threads:
+        return
+
+    print(f"Waiting for {len(other_threads)} thread(s) to finish.")
+
+    for thread in other_threads:
+        thread.join()
+
+    print("All threads have finished.")
+
+
 main()
+
+if True:
+    wait_for_threads()
+
+print("End of routine.")

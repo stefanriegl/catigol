@@ -441,7 +441,14 @@ class GolObserver(ap.Observer):
         # FIXME clean this up, move to better place
         if True:
             print("Converting processes to graph...")
-            graph = util.processes_to_graph(procs)
+            graph_procs = procs
+
+            if False:
+                graph_procs = [p for p in procs if p.start and p.end]
+                diff = len(procs) - len(graph_procs)
+                print(f"Skipping {diff} destructive processes.")
+            
+            graph = util.get_comps_and_procs_graph(graph_procs)
             if False:
                 image_path = '/tmp/debug.png'
                 print("Drawing graph...")
@@ -449,9 +456,11 @@ class GolObserver(ap.Observer):
                 import subprocess
                 print("Displaying graph...")
                 subprocess.run(['kitty', 'icat', image_path])
-            if True:
+            if False:
                 dest_dir = '/tmp/mai-explore'
                 util.write_graph_explorer(graph, dest_dir)
+            if True:
+                util.send_graph_to_cytoscape(graph, "Components and processes")
 
         next_procs = {}  # {proc: [proc, ...]}
         prev_procs = {}  # {proc: [proc, ...]}
@@ -466,6 +475,10 @@ class GolObserver(ap.Observer):
                         prev_procs[proc_to].append(proc_from)
                     else:
                         prev_procs[proc_to] = [proc_from]
+
+        if True:
+            graph = util.get_procs_graph(next_procs)
+            util.send_graph_to_cytoscape(graph, "Processes")
 
         # for later use
         #unlinked_procs = [p for p in procs if p not in next_procs and p not in prev_procs]
@@ -730,14 +743,46 @@ class GolObserver(ap.Observer):
                         #print(f"      - End processes:   {net_procs_end}")
 
                         if True:  # debug info output
-                            get_links = lambda pf: {proc_hashes[pt] for pt in next_procs.get(pf, [])}
-                            graph_dict = {proc_hashes[pf]: get_links(pf) for pf in window_network}
+                            # FIXME using hashes as keys for all nodes is too strong! manually tie end and beginning together
+                            #get_links = lambda pf: {proc_hashes[pt] for pt in next_procs.get(pf, [])}
+                            #proc_hashes_window = {p: proc_hashes[p] for p in window_network}
+                            # there's probably a smarter way to do this, maybe collections.Counter too
+                            #procs_per_hash = {hu: [p for (p, h) in proc_hashes_window.items() if h == hu] for hu in set(proc_hashes_window.values())}
+                            #graph_dict = {proc_hashes[pf]: get_links(pf) for pf in window_network}
+                            graph_dict = {}
+                            for pf in window_network:
+                                pfh = proc_hashes[pf]
+                                ptsh = {proc_hashes[pt] for pt in next_procs.get(pf, [])}
+                                if pfh in graph_dict:
+                                    graph_dict[pfh].update(ptsh)
+                                else:
+                                    graph_dict[pfh] = ptsh
+                                
                             if False:
                                 print("CONN")
                                 for p in graph_dict:
                                     print(" ", p, graph_dict[p])
-                            filename = f'connected_comps.wl{window_size}.ws{window_start}.ni{network_index}'
-                            util.debug_draw_graph(graph_dict, filename, verbose=False)
+
+                            print("      - ", end='')
+                            filename = f'connected_comps.c{window_size}.w{window_start:02d}-{window_start + window_size:02d}.ni{network_index}'
+                            util.debug_draw_graph(graph_dict, filename, verbose=True)
+
+                            get_proc_repr = lambda p: f"[{proc_hashes[p]}]\n{repr(p)}"
+                            get_links = lambda pf: [get_proc_repr(pt) for pt in next_procs.get(pf, [])]
+                            graph_dict = {get_proc_repr(pf): get_links(pf) for pf in window_network}
+                            
+                            graph_dict = {}
+                            for pf in window_network:
+                                pfk = get_proc_repr(pf)
+                                ptsk = {get_proc_repr(pt) for pt in next_procs.get(pf, [])}
+                                if pfk in graph_dict:
+                                    graph_dict[pfk].update(ptsk)
+                                else:
+                                    graph_dict[pfk] = ptsk
+
+                            print("      - ", end='')
+                            filename = f'network_slice.c{window_size}.w{window_start:02d}-{window_start + window_size:02d}.ni{network_index}'
+                            util.debug_draw_graph(graph_dict, filename, verbose=True)
                         
                         for proc in net_procs:
                             try:

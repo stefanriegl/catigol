@@ -3,14 +3,17 @@ from collections import defaultdict
 from itertools import product
 from shutil import copy as shutil_copy
 import os.path
+import sys
 from json import dumps as json_dumps
 from subprocess import run as subprocess_run
+from threading import Thread
 
 #from ap import StructureClass, ComponentRelationConstraint
 
 import networkx as nx
 from matplotlib import pyplot as plot
 # import subprocess
+import pandas as pd
 
 
 class ReportSection:
@@ -164,6 +167,31 @@ def get_comps_and_procs_graph(processes):
     return graph
 
 
+def get_procs_graph(graph_dict):
+    # graph_dict is a {node: [node,...]} adjecency dict-of-lists
+    graph = nx.DiGraph()
+    component_names = {}
+
+    procs = frozenset([n for ns in graph_dict.values() for n in ns] + list(graph_dict.keys()))
+    node_ids = {}
+    links = [(n1, n2) for (n1, ns) in graph_dict.items() for n2 in ns]
+
+    for index, proc in enumerate(sorted(procs, key=lambda p: set_first(p.start).time)):
+        node_id = f'{proc.kind}-p{index + 1}'
+        node_ids[proc] = node_id
+        
+        time_start = max(c.time for c in proc.start)
+        time_end = min(c.time for c in proc.end) if proc.end else time_start + 1
+        time = (time_start + time_end) / 2
+
+        graph.add_node(node_id, category='process', time=time, entity=proc, index=index)
+
+    for pf, pt in links:
+        graph.add_edge(node_ids[pf], node_ids[pt])
+
+    return graph
+
+
 def write_graph(graph, output_file_path, separate_components=True, do_labels=True, zoom=5, multipartite_layout=True):
     ##  for page in pages:
     ##    graph.add_node(page.id)
@@ -288,7 +316,10 @@ def debug_draw_graph(graph_dict, filename_base, verbose=True):
         if type(obj) == str:
             label = obj
         else:
-            label = repr(obj).replace(' frozenset', '\nfs')
+            label = repr(obj)
+        label = label.replace(' bounded-transformation', ' ba')
+        label = label.replace(' alive-contingent', '')
+        label = label.replace(' {', '\n{')
         props = []
         props.append(f'label="{label}"')
         #props.append(f'pos="{pos_x},{pos_y}"')
@@ -443,4 +474,110 @@ def write_graph_explorer(graph, dest_dir):
     with open(f'{dest_dir}/data.json', 'w') as f:
         f.write(json_dumps(data))
 
+        
+class ErrorStreamRedirect:
+    def __init__(self, target):
+        self._target = target
+        self._original = None
+    def __enter__(self):
+        self._original = sys.stderr
+        sys.stderr = self._target
+        return self
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        sys.stderr = self._original
 
+        
+def send_graph_to_cytoscape(graph, network_title, background=False):
+    import py4cytoscape as p4c
+    from datetime import datetime as dt
+
+    try:
+        # Golly prints messages that went to stderr in a popup window.
+        # Redirect stderr to stdout in this case, i.e. fail silently,
+        # if Cytoscape is just not running.
+        with ErrorStreamRedirect(sys.stdout):
+            p4c.cytoscape_ping()
+    except:
+        print("Cannot ping Cytoscape, not exporting.")
+        return
+
+    collection_name = "CATIGOL"
+    date_str = dt.now().strftime('%F %H:%M:%S')
+    network_name = f"{network_title} - {date_str}"
+
+    def conv(obj):
+        return obj if type(obj) in [str, int, bool, float] else repr(obj)
+
+    def render_name(text):
+        tokens = text.split('-')
+        abbr = ''.join(t[0] for t in tokens[:-1])
+        text = f"{abbr}-{tokens[-1]}"
+        return text
+
+    if False:
+        nodes = graph.nodes(data=True)
+        nodes = [(n, {k: conv(v) for (k, v) in d.items()}) for (n, d) in nodes]
+
+        edges = graph.edges(data=True)
+        edges = [(n1, n2, {k: conv(v) for (k, v) in d.items()}) for (n1, n2, d) in edges]
+
+        graph2 = nx.DiGraph()
+        graph2.add_nodes_from(nodes)
+        graph2.add_edges_from(edges)
+
+        try:
+            print(f"Exporting '{network_title}' to Cytoscape... ", end='', flush=True)
+            p4c.create_network_from_networkx(graph2, title=network_name, collection=collection_name)
+            print("done.")
+        except ex:
+            print("error.")
+            print(ex)
+
+    # Let's take a detour via Pandas to make sure data types are exported correctly.
+
+    nodes = graph.nodes(data=True)
+    nodes = [(render_name(n), d) for (n, d) in nodes]
+    nodes = [(n, {k: conv(v) for (k, v) in d.items()}) for (n, d) in nodes]
+    nodes = [{**attrs, 'name': name} for name, attrs in nodes]
+    nodes_df = pd.DataFrame.from_records(nodes)
+
+    edges = graph.edges(data=True)
+    edges = [(render_name(n1), render_name(n2), d) for (n1, n2, d) in edges]
+    edges = [(n1, n2, {k: conv(v) for (k, v) in d.items()}) for (n1, n2, d) in edges]
+    edges = [{**attrs, 'source': n1, 'target': n2} for n1, n2, attrs in edges]
+    edges_df = pd.DataFrame.from_records(edges)
+
+    nodes_df['name'] = nodes_df['name'].astype(str)
+    edges_df['source'] = edges_df['source'].astype(str)
+    edges_df['target'] = edges_df['target'].astype(str)
+    
+    if 'interaction' in edges_df.columns:
+        edges_df['interaction'] = edges_df['interaction'].astype(str)
+
+    if len(nodes_df.index) == 0: nodes_df = None
+    if len(edges_df.index) == 0: edges_df = None
+
+    if background:
+        # export in background
+
+        def do_export():
+            print(f"Starting export of '{network_title}' to Cytoscape in background.")
+            try:
+                p4c.create_network_from_data_frames(
+                    nodes=nodes_df, edges=edges_df, title=network_name, collection=collection_name,
+                    node_id_list='name')
+                print("Export to Cytoscape in background finished successfully.")
+            except:
+                print("Error: Export to Cytoscape in background failed.")
+        
+        Thread(target=do_export).start()
+    else:
+        try:
+            print(f"Exporting '{network_title}' to Cytoscape... ", end='', flush=True)
+            p4c.create_network_from_data_frames(
+                nodes=nodes_df, edges=edges_df, title=network_name, collection=collection_name,
+                node_id_list='name')
+            print("done.")
+        except Exception as ex:
+            print("error.")
+            print(ex)
