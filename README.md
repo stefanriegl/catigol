@@ -1,2 +1,1 @@
-# catigol
-Computational Autopoietic Theory in Game of Life
+# Golicat: Game of Life integrated Computational Autopoietic Theory
