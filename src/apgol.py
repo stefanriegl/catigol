@@ -1,16 +1,20 @@
 
 from typing import NamedTuple
-from functools import partial
-from itertools import permutations, combinations, product, cycle
+from functools import partial, reduce
+from itertools import permutations, combinations, product, cycle, groupby
 from collections import defaultdict, Counter
+from math import sqrt
+
+import networkx as nx
+import networkx.algorithms.isomorphism as nx_iso
 
 import ap
 import util
 
 # Better integration for golly
-import importlib
-importlib.reload(ap)
-importlib.reload(util)
+#import importlib
+#importlib.reload(ap)
+#importlib.reload(util)
 
 
 
@@ -20,6 +24,11 @@ class Location(NamedTuple):
     y: int
     def __repr__(self) -> str:
         return '({}|{})'.format(self.x, self.y)
+    def point_in(self, left, top, right, bottom):
+        #l, r = min(left, right), max(left, right)
+        #b, t = min(bottom, top), max(bottom, top)
+        #return l <= self.x and self.x <= r and b <= self.y and self.y <= t
+        return left <= self.x and self.x <= right and bottom <= self.y and self.y <= top
 
 
 class GolCell:
@@ -33,6 +42,14 @@ class GolCell:
         self._neighbours[4] = self  # (dx, dy) == (0, 0)
         self.ancestor = ancestor
         self.descendant = descendant
+
+    # for pickling
+    # FIXME this does not store links between cells!
+    # resolving cycles is possible, but would take more work. not now.
+    def __getstate__(self):
+        return (self.location, self.time, self.value)
+    def __setstate__(self, state):
+        self.location, self.time, self.value = state
         
     def _get_neighbour_index(self, dx, dy):
         if abs(dx) > 1 or abs(dy) > 1:
@@ -175,10 +192,13 @@ class GolEnvironment(ap.Discrete2DEnvironment):
 
 class GolObserver(ap.Observer):
 
-    def __init__(self, environment):
+    def __init__(self, environment, config):
         super().__init__()
-
         self.environment = environment
+        self.setup_recognisers()
+        self.config = config
+
+    def setup_recognisers(self):
         
         # component (unity)
         self.component_recognisers = {
@@ -188,7 +208,7 @@ class GolObserver(ap.Observer):
             'alive-single': self._is_component_alive,
             'alive-contingent': self._is_component_alive,
             'alive-bounded': self._is_component_alive_bounded,
-            'alive-bounded-env': self._is_component_alive_bounded_env,
+            #'alive-bounded-env': self._is_component_alive_bounded_env,
         }
 
         # component relation
@@ -211,26 +231,28 @@ class GolObserver(ap.Observer):
         # self._create_glider_process_recognisers()
 
         # structure class
-        self.structure_classes = {
-            'block': ap.StructureClass.parse([
-                '....',
-                '.##.',
-                '.##.',
-                '....'
-            ]),
-            'blinker-h': ap.StructureClass.parse([
-                '.....',
-                '.###.',
-                '.....',
-            ]),
-            'blinker-v': ap.StructureClass.parse([
-                '...',
-                '.#.',
-                '.#.',
-                '.#.',
-                '...',
-            ]),
-        }
+        # self.structure_classes = {
+        #     'block': ap.StructureClass.parse([
+        #         '....',
+        #         '.##.',
+        #         '.##.',
+        #         '....'
+        #     ]),
+        #     'blinker-h': ap.StructureClass.parse([
+        #         '.....',
+        #         '.###.',
+        #         '.....',
+        #     ]),
+        #     'blinker-v': ap.StructureClass.parse([
+        #         '...',
+        #         '.#.',
+        #         '.#.',
+        #         '.#.',
+        #         '...',
+        #     ]),
+        # }
+        #self._create_glider_structure_classes()
+
         # nbh_sc_c = frozenset([
         #     ComponentRelationConstraint('north-west-of', 0, 4),
         #     ComponentRelationConstraint('north-of',      1, 4),
@@ -243,21 +265,38 @@ class GolObserver(ap.Observer):
         # ])
         # nbh_sc = StructureClass(list(range(9)), nbh_sc_c)
         # self.structure_classes['neighbourhood'] = nbh_sc
-        self._create_glider_structure_classes()
 
         # organisation class
-        self.organisation_classes = {
-        }
+        #self.organisation_classes = {
+        #}
 
         # optimisation
-        self.component_structures = {}
+        #self.component_structures = {}
 
-
+        
+    def _filter_processes(self, procs, start=None, end=None, rect=None):
+        for proc in procs:
+            if start is not None:
+                if end is not None and not all(start <= comp.time and comp.time <= end for comp in proc.start):
+                    # start and end are given, at least one component lies outside that boundary
+                    continue
+                elif not all(start <= comp.time for comp in proc.start):
+                    # start is given, at least one component exists earlier
+                    continue
+            elif end is not None and not all(comp.time <= end for comp in proc.end):
+                # end is given, at least one component exists later
+                continue
+            if rect is not None and not all(ce.location.point_in(*rect) for cs in (proc.start, proc.end) for c in cs for ce in c.space):
+                # search rect given, at least one component lies outside
+                continue
+            yield proc
+            
+                
     def observe(self):
         time = self.environment.get_duration() - 1
 
-        print()
-        print(f"# Observing world at time {time}.")
+        #print()
+        #print(f"# Observing world at time {time}.")
         
         # single alive cell components
         cells = self.environment.get_cells(time)
@@ -312,11 +351,6 @@ class GolObserver(ap.Observer):
             space = frozenset(set.union(*[comp.space for comp in group]))
             self.recognise_component('alive-contingent', space, time)
 
-        if True:  # output
-            print("Contingent alive cell components:")
-            for comp in self.components[time]['alive-contingent']:
-                print(f"- {comp}")
-
         # FUTURE algo for growing spaces should be somewhere else
         for comp in self.components[time]['alive-contingent']:
             space = frozenset(nb for ce in comp.space for nb in ce.get_neighbours())
@@ -332,10 +366,23 @@ class GolObserver(ap.Observer):
         #    self.recognise_component('alive-bounded-env', space, time)
         #
         #print("Bounded alive cell components with their environment:", self.components[time]['alive-bounded-env'])
+        
+        # debug output: components
+        if self.config.getboolean('debug', 'verbose_observe', fallback=False):
+            comps = self.components[time]['alive-contingent']
+            if self.config.getboolean('debug', 'list_components', fallback=False):
+                print("Contingent alive cell components:")
+                for comp in comps:
+                    print(f"- {comp}")
+            else:
+                print(f"Contingent alive cell components: {len(comps)}")
 
         # From here we consider temporal things (that also existed earlier).
         if time == 0:
             return
+
+        # FUTURE stuff below here could be outsourced to another function
+        # make sure there are no dependencies with the above before
 
         # See whether one of the space of one of this time's bounded components
         # is included in the space of one of previous time's bounded components.
@@ -384,34 +431,43 @@ class GolObserver(ap.Observer):
 
             self.recognise_process('bounded-transformation', frozenset(proc_comps_start), frozenset(proc_comps_end))
 
-        if False:  # output
-            procs = self.processes['bounded-transformation']
-            # for all processes, all components at the end have the same time (if there are components)
-            assert all(len({ce.time for ce in p.end}) <= 1 for p in procs)
-            procs = [p for p in procs if p.end and util.set_first(p.end).time == time]
+        #
+        # only debug output below
+        #
+        
+        if not self.config.getboolean('debug', 'verbose_observe', fallback=False):
+            return
+        
+        # processes
+        
+        procs = self.processes['bounded-transformation']
+        # for all processes, all components at the end have the same time (if there are components)
+        # FIXME assert in debug code is stupid, get rid of this
+        assert all(len({ce.time for ce in p.end}) <= 1 for p in procs)
+        procs = [p for p in procs if p.end and util.set_first(p.end).time == time]
+        
+        if self.config.getboolean('debug', 'list_processes', fallback=False):            
             print("Bounded transformation processes:")
             for proc in procs:
                 print(f"- {proc}")
+        else:
+            print(f"Bounded transformation processes: {len(procs)}")
 
-        if True:  # output
-            procs = self.processes['bounded-transformation']
-            procs = [p for p in procs if not p.end or not p.start]
-            if procs:
-                if False:
-                    print("Destructive processes:")
-                    for proc in procs:
-                        print(f"- {proc}")
-                else:
-                    print(f"Destructive processes: {len(procs)}")
-            else:
-                print("No destructive processes.")
+        # destructive processes
 
-                
+        procs = self.processes['bounded-transformation']
+        procs = [p for p in procs if not p.end or not p.start]
+
+        if self.config.getboolean('debug', 'list_processes_destructive', fallback=False):
+            print("Destructive processes:")
+            for proc in procs:
+                print(f"- {proc}")
+        else:
+            print(f"Destructive processes: {len(procs)}")
+
+                            
     def reflect(self):
 
-        print()
-        print("Reflection.")
-        
         # FIXME incorporate this somehow into observer memory
 
         #procs = {proc.start: proc for proc in self.processes['bounded-transformation']}
@@ -442,8 +498,8 @@ class GolObserver(ap.Observer):
         #        nodes[proc.end] = ([proc], [])
 
         # FIXME clean this up, move to better place
-        if True:
-            print("Converting processes to graph...")
+        if False or self.config.getboolean('cytoscape', 'obs_comps_n_procs', fallback=False):
+            #print("Converting processes to graph...")
             graph_procs = procs
 
             if False:
@@ -462,26 +518,24 @@ class GolObserver(ap.Observer):
             if False:
                 dest_dir = '/tmp/mai-explore'
                 util.write_graph_explorer(graph, dest_dir)
-            if True:
+            if self.config.getboolean('cytoscape', 'obs_comps_n_procs', fallback=False):
                 util.send_graph_to_cytoscape(graph, "Components and processes")
 
-        next_procs = {}  # {proc: [proc, ...]}
-        prev_procs = {}  # {proc: [proc, ...]}
-        for proc_from in procs:
-            for proc_to in procs:
-                if not proc_from.end.isdisjoint(proc_to.start):
-                    if proc_from in next_procs:
-                        next_procs[proc_from].append(proc_to)
-                    else:
-                        next_procs[proc_from] = [proc_to]
-                    if proc_to in prev_procs:
-                        prev_procs[proc_to].append(proc_from)
-                    else:
-                        prev_procs[proc_to] = [proc_from]
+        # next_procs = {}  # {proc: [proc, ...]}
+        # prev_procs = {}  # {proc: [proc, ...]}
+        # for proc_from in procs:
+        #     for proc_to in procs:
+        #         if not proc_from.end.isdisjoint(proc_to.start):
+        #             if proc_from in next_procs:
+        #                 next_procs[proc_from].append(proc_to)
+        #             else:
+        #                 next_procs[proc_from] = [proc_to]
+        #             if proc_to in prev_procs:
+        #                 prev_procs[proc_to].append(proc_from)
+        #             else:
+        #                 prev_procs[proc_to] = [proc_from]
 
-        if True:
-            graph = util.get_procs_graph(next_procs)
-            util.send_graph_to_cytoscape(graph, "Processes")
+        next_procs, prev_procs = util.get_proc_adjacency_matrix(procs, True)
 
         # for later use
         #unlinked_procs = [p for p in procs if p not in next_procs and p not in prev_procs]
@@ -538,70 +592,6 @@ class GolObserver(ap.Observer):
                 values2[index] = cell.value
             return values1 == values2
 
-        def get_space_bb(space):
-            loc_iter = iter(cell.location for cell in space)
-            loc = next(loc_iter)
-            x_min, x_max, y_min, y_max = loc.x, loc.x, loc.y, loc.y
-            for loc in loc_iter:
-                if loc.x < x_min: x_min = loc.x
-                if loc.x > x_max: x_max = loc.x
-                if loc.y < y_min: y_min = loc.y
-                if loc.y > y_max: y_max = loc.y
-            return x_min, x_max, y_min, y_max
-
-        def get_space_values(space, xy_min_max):
-            x_min, x_max, y_min, y_max = xy_min_max
-            x_delta, y_delta = x_max - x_min, y_max - y_min
-            values = [None] * ((x_delta + 1) * (y_delta + 1))
-            width = x_delta if x_delta > 0 else 1
-            for cell in space:
-                dx, dy = cell.location.x - x_min, cell.location.y - y_min
-                index = dy * width + dx % width
-                values[index] = cell.value
-            return values
-
-        def get_transition_table(value_domain):
-            transition_table = {}
-            value_domain_len = len(value_domain)
-            for index_from, value_from in enumerate(value_domain):
-                for index_to, value_to in enumerate(value_domain):
-                    number = index_to * value_domain_len + index_from
-                    transition_table[(value_from, value_to)] = number
-            return transition_table
-
-        # TODO more elegant way to name and where to put
-        # hard-coded value domain for optimisation
-        transition_table = get_transition_table([None, True, False])
-
-        def better_hash(obj):
-            h = hash(obj)
-            h = (h + 2**32) % 2**32
-            h = f'{h:08x}'
-            return h
-        
-        # TODO check whether this is inline with theory and if so move elsewhere
-        def get_proc_hash(proc):
-            # FUTURE review current assumptions: t2-t1=1
-            comps1_space = frozenset.union(*(co.space for co in proc.start))
-            c1_xy_min_max = get_space_bb(comps1_space)
-
-            if proc.end:
-                comps2_space = frozenset.union(*(co.space for co in proc.end))
-                c2_xy_min_max = get_space_bb(comps2_space)
-                x_mins, x_maxs, y_mins, y_maxs = zip(c1_xy_min_max, c2_xy_min_max)
-                xy_min_max = min(x_mins), max(x_maxs), min(y_mins), max(y_maxs)
-                values2 = get_space_values(comps2_space, xy_min_max)
-            else:
-                x_min, x_max, y_min, y_max = c1_xy_min_max
-                values2 = [None] * ((x_max - x_min) * (y_max - y_min))
-                xy_min_max = c1_xy_min_max
-
-            values1 = get_space_values(comps1_space, xy_min_max)
-            transitions = [transition_table[tuple(pair)] for pair in zip(values1, values2)]
-            # hashing could be smarter
-            #return str(transitions)
-            return better_hash(tuple(transitions))
-
         # TODO alternative network detection algorithm
         #
         # ALGO v2: find networks of structures
@@ -619,11 +609,11 @@ class GolObserver(ap.Observer):
         #     remember cycle and stretch
         #     remove procs of stretch from list of uncyclical procs
             
-        def get_procs_in_window(start, end, procs):
-            for proc in procs:
-                if not all(comp.time >= start for comp in proc.start): continue
-                if not all(comp.time <= end for comp in proc.end): continue
-                yield proc            
+        #def get_procs_in_window(start, end, procs):
+        #    for proc in procs:
+        #        if not all(comp.time >= start for comp in proc.start): continue
+        #        if not all(comp.time <= end for comp in proc.end): continue
+        #        yield proc            
 
         # based on https://stackoverflow.com/a/13837045/8952900
         def get_connected_graph_components(neighbors):
@@ -651,9 +641,8 @@ class GolObserver(ap.Observer):
             next_procs_hashes = '+'.join(proc_hashes[p] for p in next_procs.get(proc, []))
             return f'{proc_hash}-{next_procs_hashes}'
 
-        proc_hashes = {p: get_proc_hash(p) for p in procs}
+        proc_hashes = {p: p.to_hash() for p in procs}
 
-        print()
         print("Searching for cyclical networks")
 
         # assume processes that only have start/end comps at the same time
@@ -671,20 +660,26 @@ class GolObserver(ap.Observer):
         window_sizes = list(range(2, min(working_memory_duration, last_env_time)))
         unexplained_procs = procs.copy()
 
+        trajectories = {}  # {cycle_hash: [trajectory_info, ...]}
+        cycles = {}  # {cycle_hash: cycle_info}
+
         # e.g. a window with size 2 spans over processes at three different times,
         # i.e. one segment (lasting one time unit), capturing 0-* process relationships
         #
         # e.g. window size 3, window start 2 -> times [2, 3, 4, 5] since 5-2=3
         # i.e. 4 sets of components (unused), 3 sets of processes, 2 sets of process relations (segments)
         for window_size in window_sizes:
-            print(f"- Cyles of length {window_size - 1}")
+            print(f"- Searching for cyles of length {window_size - 1}")
             # TODO inner loops should be own function
+
+            cycles_of_this_length = {}  # {cycle_hash: cycle_info}
 
             # last_env_time is also a valid time
             # because window_size refers to the interval of times, another +1
             for window_start in range(0, last_env_time - (window_size + 1)):
                 window_end = window_start + window_size
-                procs_window = tuple(get_procs_in_window(window_start, window_end, unexplained_procs))
+                #procs_window = tuple(get_procs_in_window(window_start, window_end, unexplained_procs))
+                procs_window = tuple(self._filter_processes(unexplained_procs, start=window_start, end=window_end))
                 # could be optimised
                 #next_procs_window = {p: frozenset(next_procs.get(p, [])) for p in procs_window}
                 #prev_procs_window = {p: prev_procs[p] for p in procs_window}
@@ -737,40 +732,60 @@ class GolObserver(ap.Observer):
                     hashes_start = sorted(proc_hashes[p] for p in net_procs_start)
                     hashes_end = sorted(proc_hashes[p] for p in net_procs_end)
 
+                    # TODO this could use get_proc_rel_hash() instead
+                    # recording of cycle could happen here already, would streamline code below
+
                     # TODO re-evaluate this. is this a good way to check for cycles?
                     if hashes_start == hashes_end:
                         # cycle found!
-                        hashes_str = '--'.join('/'.join(sorted(proc_hashes[p] for p in net_segments[nsi])) for nsi in sorted(net_segments))
-                        print(f"    - Found cycle: {hashes_str}")
-                        #print(f"      - Start processes: {net_procs_start}")
-                        #print(f"      - End processes:   {net_procs_end}")
+                        #hashes_str = '--'.join('/'.join(sorted(proc_hashes[p] for p in net_segments[nsi])) for nsi in sorted(net_segments))
+                        # wrap around, so list of hashes start with smallest hash
+                        # (keep order for the rest, this is just to normalise this fancy base for the next hash)
+                        hash_tokens = ['/'.join(sorted(proc_hashes[p] for p in net_segments[nsi])) for nsi in sorted(net_segments)]
+                        # skip last one as it's the same as first, which messes up wrapping
+                        hash_tokens = hash_tokens[:-1]
+                        first_index = hash_tokens.index(min(hash_tokens))
+                        hash_tokens_wrapped = hash_tokens[first_index:] + hash_tokens[:first_index]                        
+                        hashes_str = '--'.join(hash_tokens_wrapped)
+                        cycle_hash = util.better_hash(hashes_str)
+
+                        if cycle_hash not in cycles:
+                            #print(f"  - Found cycle ({cycle_hash}): {hashes_str}")
+                            #print(f"      - Start processes: {net_procs_start}")
+                            #print(f"      - End processes:   {net_procs_end}")
+
+                            cycle_info = (cycle_hash, window_size, hashes_str)
+                            cycles_of_this_length[cycle_hash] = cycle_info
+                            cycles[cycle_hash] = cycle_info
+                            
+                            if True:  # debug info output
+                                # FIXME using hashes as keys for all nodes is too strong! manually tie end and beginning together
+                                #get_links = lambda pf: {proc_hashes[pt] for pt in next_procs.get(pf, [])}
+                                #proc_hashes_window = {p: proc_hashes[p] for p in window_network}
+                                # there's probably a smarter way to do this, maybe collections.Counter too
+                                #procs_per_hash = {hu: [p for (p, h) in proc_hashes_window.items() if h == hu] for hu in set(proc_hashes_window.values())}
+                                #graph_dict = {proc_hashes[pf]: get_links(pf) for pf in window_network}
+                                graph_dict = {}
+                                for pf in window_network:
+                                    pfh = proc_hashes[pf]
+                                    ptsh = {proc_hashes[pt] for pt in next_procs.get(pf, [])}
+                                    if pfh in graph_dict:
+                                        graph_dict[pfh].update(ptsh)
+                                    else:
+                                        graph_dict[pfh] = ptsh
+
+                                if False:
+                                    print("CONN")
+                                    for p in graph_dict:
+                                        print(" ", p, graph_dict[p])
+
+                                print("  - ", end='')
+                                #filename = f'cycles.c{window_size}.w{window_start:02d}-{window_start + window_size:02d}.ni{network_index}'
+                                filename = f'cycle.s{window_size - 1:02d}.c{cycle_hash}'
+                                util.debug_draw_graph(graph_dict, filename, verbose=True)
 
                         if True:  # debug info output
-                            # FIXME using hashes as keys for all nodes is too strong! manually tie end and beginning together
-                            #get_links = lambda pf: {proc_hashes[pt] for pt in next_procs.get(pf, [])}
-                            #proc_hashes_window = {p: proc_hashes[p] for p in window_network}
-                            # there's probably a smarter way to do this, maybe collections.Counter too
-                            #procs_per_hash = {hu: [p for (p, h) in proc_hashes_window.items() if h == hu] for hu in set(proc_hashes_window.values())}
-                            #graph_dict = {proc_hashes[pf]: get_links(pf) for pf in window_network}
-                            graph_dict = {}
-                            for pf in window_network:
-                                pfh = proc_hashes[pf]
-                                ptsh = {proc_hashes[pt] for pt in next_procs.get(pf, [])}
-                                if pfh in graph_dict:
-                                    graph_dict[pfh].update(ptsh)
-                                else:
-                                    graph_dict[pfh] = ptsh
-                                
-                            if False:
-                                print("CONN")
-                                for p in graph_dict:
-                                    print(" ", p, graph_dict[p])
-
-                            print("      - ", end='')
-                            filename = f'connected_comps.c{window_size}.w{window_start:02d}-{window_start + window_size:02d}.ni{network_index}'
-                            util.debug_draw_graph(graph_dict, filename, verbose=True)
-
-                            get_proc_repr = lambda p: f"[{proc_hashes[p]}]\n{repr(p)}"
+                            get_proc_repr = lambda p: f"[{proc_hashes[p]}]\n{repr(p)}\n<{util.better_hash(p)}>"
                             get_links = lambda pf: [get_proc_repr(pt) for pt in next_procs.get(pf, [])]
                             graph_dict = {get_proc_repr(pf): get_links(pf) for pf in window_network}
                             
@@ -783,8 +798,8 @@ class GolObserver(ap.Observer):
                                 else:
                                     graph_dict[pfk] = ptsk
 
-                            print("      - ", end='')
-                            filename = f'network_slice.c{window_size}.w{window_start:02d}-{window_start + window_size:02d}.ni{network_index}'
+                            print("  - ", end='')
+                            filename = f'network_window.s{window_size - 1}.w{window_start:02d}-{window_start + window_size:02d}.ni{network_index}'
                             util.debug_draw_graph(graph_dict, filename, verbose=True)
                         
                         for proc in net_procs:
@@ -798,6 +813,7 @@ class GolObserver(ap.Observer):
                         identity_lifetime = window_size
                         procs_cycle = net_procs_start.copy()
                         procs_world = net_procs_end.copy()
+                        procs_trajectory = set(window_network)
 
                         while procs_cycle and procs_world:
                             # TODO cache hashes for cycle! :C
@@ -817,15 +833,439 @@ class GolObserver(ap.Observer):
                             identity_lifetime += 1
                             procs_cycle = {pt for pf in procs_cycle for pt in next_procs.get(pf, [])}
                             procs_world = {pt for pf in procs_world for pt in next_procs.get(pf, [])}
+                            procs_trajectory.update(procs_world)
 
-                        print(f"      - Identity extends over {identity_lifetime} time units.")
+                        if cycle_hash not in trajectories:
+                            trajectories[cycle_hash] = []
+                            
+                        trajectory_info = (cycle_hash, window_size - 1, window_start, identity_lifetime, network_index, hashes_str, procs_trajectory)
+                        trajectories[cycle_hash].append(trajectory_info)
+  
+                        print(f"  - Found identity ({cycle_hash}) that extends over {identity_lifetime} time units.")
                     
                     #net_seg_sigs = [get_segment_signature(net_procs[t], net_procs[t + 1], next_procs) for t in range(len(net_segments) - 1)]
                     # len(net_seg_sigs) == window_size
 
+            if cycles_of_this_length:
+                print("  - Summary of cycles (organisations) found:")
+
+                for cycle_info in sorted(cycles_of_this_length.values(), key=lambda ci: ci[1]):
+                    cycle_hash, cycle_size, hashes_str = cycle_info
+                    print(f"    - Cycle {cycle_hash}: {hashes_str}")
+        
+        if self.config.getboolean('cytoscape', 'obs_procs', fallback=False):  # debug output
+            graph = util.get_procs_graph(next_procs)
+
+            proc_data = {d['entity']: (n, d) for (n, d) in graph.nodes(data=True)}
+            cycle_ids = {}
+
+            #for node, data in proc_data.items():
+            for cycle_hash, trajectory_infos in trajectories.items():
+                if cycle_hash not in cycle_ids:
+                    cycle_ids[cycle_hash] = len(cycle_ids) + 1
+                for trajectory_info in trajectory_infos:
+                    procs_trajectory = trajectory_info[6]
+                    for proc in procs_trajectory:
+                        node, data = proc_data[proc]
+                        # convert to integer to allow continuous mapping to colour in Cytoscape
+                        #data['cycle'] = int(cycle_hash, base=16)
+                        if 'cycle' in data:
+                            print(f"Uh oh, process node {node} belongs to multiple cycles: {data['cycle']} and {cycle_hash}")
+                        data['cycle'] = cycle_hash
+                        data['cycle_num'] = cycle_ids[cycle_hash]
+                        graph.add_node(node, **data)
+
+            for node, data in graph.nodes(data=True):
+                data['hash'] = proc_hashes[data['entity']]
+                if 'cycle' not in data:
+                    data['cycle'] = ''
+                    data['cycle_num'] = 0
+                graph.add_node(node, **data)                    
+                
+            util.send_graph_to_cytoscape(graph, "Processes")
+
+
+    def detect_computation(self):
+        # ALGO: find instances of computation
+
+        # parameter: per episode, start, end, space
+
+        # Note that in Golly's y-axis direction is flipped compared to the
+        # values in this this tuple. I.e. make sure bottom < top.
+        episode_rect = (-38, 42, -11, 17)  # left, top, right, bottom
+        episode_rect2 = (-38 + 120, 42, -11 + 120, 17)  # left, top, right, bottom
+        episodes = [
+            # (episode_rect, 16, 16 + 88),
+            # (episode_rect, 132, 132 + 88)
+            (episode_rect, 26, 26 + 68),
+            (episode_rect, 146, 146 + 68),
+            (episode_rect2, 26, 26 + 68),
+            (episode_rect2, 146, 146 + 68),
+        ]
+        episodes_input_max_units = 7
+        episodes_output_min_units = 3
+        
+        # TODO test with mis-aligned episode window starts
+        
+        # contrast episodes
+        #   determine scaffold structure/component across episodes
+        #   find time offset for each episode
+        # for each episode
+        #   knowing what scaffold is, detect input vehicles
+        #     same time, other space, input components to multi-input process, not present in all episodes
+
+        # FIXME code duplication here. migrate code in reflect() to use networkx graphs
+        procs = self.processes['bounded-transformation']
+
+        print(f"Building cache of process times.")
+
+        # for all procs all start and end comps have the same time
+        assert all(len({ce.time for ce in p.start}) <= 1 for p in procs)
+        assert all(len({ce.time for ce in p.end}) <= 1 for p in procs)
+        # assume all processes span only one unit of time (if they span at all, i.e. not destructive)
+        assert all(not p.end or util.set_first(p.end).time - util.set_first(p.start).time == 1 for p in procs)
+        
+        print("Connecting processes to graph.")
+        # proc_times_start = {p: util.set_first(p.start).time for p in procs}
+        # # proc_times_end = {p: util.set_first(p.end).time for p in procs if p.end}
+        # proc_sorter = lambda p: proc_times_start[p]
+        # procs_sorted = sorted(procs, key=proc_sorter)
+        # procs_by_time = {time: list(group) for (time, group) in groupby(procs, key=proc_sorter)}
+        # time_keys = list(procs_by_time.keys())
+        # time_pairs = [(t1, t2) for (t1, t2) in zip(time_keys[:-1], time_keys[1:])]
+        #
+        # next_procs = {}  # {proc: [proc, ...]}
+        # for time_from, time_to in time_pairs:
+        #     for proc_from in procs_by_time[time_from]:
+        #         for proc_to in procs_by_time[time_to]:
+        #             if not proc_from.end:
+        #                 # destructive process, skip
+        #                 continue
+        #             # optimisation: quicker check for component times than set operations
+        #             # works due to asserted assumptions above
+        #             #if proc_times_end[proc_from] != proc_times_start[proc_to]:
+        #             #    continue
+        #             if not proc_from.end.isdisjoint(proc_to.start):
+        #                 if proc_from in next_procs:
+        #                     next_procs[proc_from].append(proc_to)
+        #                 else:
+        #                     next_procs[proc_from] = [proc_to]
+        next_procs = util.get_proc_adjacency_matrix(procs)
+
+        graph = util.get_procs_graph(next_procs)
+
         print()
-        print("CONTROLLED STOP OF reflect()")
-        return
+        print("Exploring episodes.")
+        episode_infos = []
+
+        for index, (ep_rect, ep_start, ep_end) in enumerate(episodes):
+
+            print(f"- Episode {index + 1}")
+ 
+            ep_procs = tuple(self._filter_processes(procs, start=ep_start, end=ep_end, rect=ep_rect))
+            ep_nodes = [nid for (nid, proc) in graph.nodes(data='entity') if proc in ep_procs]
+            ep_graph = graph.subgraph(ep_nodes)
+            for node, data in ep_graph.nodes(data=True):
+                data['episode'] = index
+            ep_nets = [ep_graph.subgraph(cc) for cc in nx.weakly_connected_components(ep_graph)]
+
+            sizes_str = ", ".join(str(size) for size in sorted((len(net) for net in ep_nets), reverse=True))
+            print(f"  - Found {len(ep_nets)} networks in {len(ep_procs)} processes.")
+            print(f"  - Network sizes: {sizes_str}")
+
+            # next part could be optimised (it's mostly just copy-pasted)
+            ep_input_end = ep_start + episodes_input_max_units
+            ep_procs_early = tuple(self._filter_processes(ep_procs, start=ep_start, end=ep_input_end, rect=ep_rect))
+            ep_nodes_early = [nid for (nid, proc) in graph.nodes(data='entity') if proc in ep_procs_early]
+            ep_graph_early = graph.subgraph(ep_nodes_early)
+            ep_nets_early = [ep_graph_early.subgraph(cc) for cc in nx.weakly_connected_components(ep_graph_early)]
+
+            sizes_str = ", ".join(str(size) for size in sorted((len(net) for net in ep_nets_early), reverse=True))
+            print(f"  - Early network sizes: {sizes_str}")
+            
+            episode_infos.append({
+                'rect': ep_rect,
+                'start': ep_start,
+                'end': ep_end,
+                'graph': ep_graph,
+                'nets': ep_nets,
+                'nets_early': ep_nets_early,
+                'input': ep_nets_early.copy(),
+                'shared': [],
+                'noise': [],
+                'output': [],
+            })
+
+            if self.config.getboolean('cytoscape', 'comp_eps', fallback=False):
+                print('  - ', end='')
+                util.send_graph_to_cytoscape(ep_graph, f"Episode {index + 1}")
+
+        # shared sub-networks
+                
+        #_, index = min((len(nets), index) for (index, nets) in enumerate(zip(episode_infos)[1]))
+        ep0_graph = episode_infos[0]['graph']
+        ep0_nets_input = episode_infos[0]['input']
+        eps_nets_input = [ei['input'] for ei in episode_infos[1:]]
+
+        def is_node_equal(d1, d2):
+            proc1, proc2 = d1['entity'], d2['entity']
+            if proc1.to_hash() != proc2.to_hash():
+                return False
+            # if proc1.get_centroid() != proc2.get_centroid():
+            #     x1, y1 = proc1.get_centroid()
+            #     x2, y2 = proc2.get_centroid()
+            #     dist = sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+            #     print(f"BEBUG INFO: Unequal centroids. Distance is {dist}.")
+            #     return False
+            return True
+        
+        def is_net_equal(g1, g2):
+            if len(g1) != len(g2):
+                return False
+            return nx_iso.is_isomorphic(g1, g2, node_match=is_node_equal)
+
+        def maximise_subgraph(subgraph, episode_info):
+            # FIXME this is a bad, lazy, possibly expensive solution
+            node = util.set_first(subgraph.nodes)
+            graph = episode_info['graph'].to_undirected(as_view=True)
+            nodes = nx.node_connected_component(graph, node)
+            return graph.subgraph(nodes)
+
+        def is_subgraph_of(graph1, graph2):
+            return all(n in graph2 for n in graph1)
+            
+        print()
+        print("Shared sub-networks in early networks.")
+
+        for ep0_net in ep0_nets_input.copy():  # one particular network of the first episode
+            eps_equal_nets = [[net for net in ep_nets if is_net_equal(ep0_net, net)] for ep_nets in eps_nets_input]
+
+            # print("eq", eps_equal_nets)
+
+            # print("- [D] sizes:", end='')
+            # for index, ep_nets in enumerate(eps_equal_nets):
+            #    sizes_str = ",".join(str(l) for l in sorted((len(n) for n in ep_nets), reverse=True))
+            #    print(f" ep{index + 1 + 1}:{sizes_str}", end='')
+            # print()
+            
+            if not all(len(ep_nets) == 1 for ep_nets in eps_equal_nets):
+                continue
+
+            # at this point eps_equal_nets is a list of one-element-lists
+            # flatten and prefix. multiple sub-networks in one graph
+            eps_shared_nets = [ep0_net] + [net for ep_nets in eps_equal_nets for net in ep_nets]
+
+            sizes_str = ", ".join(str(len(maximise_subgraph(net, ei))) for (net, ei) in zip(eps_shared_nets, episode_infos))
+            print(f"- Net with {len(ep0_net)} processes (in episodes extended to {sizes_str} respectively).")
+
+            # FIXME make sure that this doesn't break with multiple equal processes
+            for episode_info, ep_shared_nets in zip(episode_infos, eps_shared_nets):
+                episode_info['input'].remove(ep_shared_nets)
+                episode_info['shared'].append(ep_shared_nets)
+                                
+        if self.config.getboolean('cytoscape', 'comp_shared_nets', fallback=False):
+            shared_nets = episode_infos[0]['shared']
+            ep_shared_graph_first = ep0_graph.subgraph(n for net in shared_nets for n in net.nodes)
+            print('- ', end='')
+            util.send_graph_to_cytoscape(ep_shared_graph_first, f"Shared early networks")
+
+        print()
+        print("Distinct input sub-networks.")
+
+        # those distinct input sub-networks correspond to the input vehicles
+
+        for index, episode_info in enumerate(episode_infos):            
+            ep_nets = episode_info['input']
+            if ep_nets:
+                sizes_str = ", ".join(str(size) for size in sorted((len(net) for net in ep_nets), reverse=True))
+            else:
+                sizes_str = '(none)'
+            print(f"- Episode {index + 1}, sizes: {sizes_str}")
+
+        print()
+        print("Building episode-spanning super-graph.")
+
+        all_shared_nets = [ei['shared'] for ei in episode_infos]
+        unlinked_super_graph = reduce(nx.compose, [ei['graph'] for ei in episode_infos])
+        super_graph = nx.Graph(unlinked_super_graph)
+
+        # link super-graph subgraphs via some random nodes in shared sub-networks
+        for shared_nets in zip(*all_shared_nets):
+            # shared_nets is an iterable of sets of equal shared nets (iterable length: number of episodes)
+            shared_nodes = [util.set_first(net) for net in shared_nets]
+            for node1, node2 in zip(shared_nodes[:-1], shared_nodes[1:]):
+                super_graph.add_edge(node1, node2, episode_link=True)
+
+        # Now get all the super-graph's sub-graphs that include any episode's input sub-networks.
+        input_nodes = [util.set_first(net) for ei in episode_infos for net in ei['input']]
+        core_sub_graphs = [nx.node_connected_component(super_graph, node) for node in input_nodes]
+        core_graph = super_graph.subgraph(frozenset(node for sg in core_sub_graphs for node in sg))
+
+        print(f"- Core graph has {len(core_graph)} of {len(super_graph)} nodes.")
+
+        noise_graph = super_graph.subgraph(super_graph.nodes - core_graph.nodes)
+        noise_nodes_sub_graphs = list(nx.weakly_connected_components(unlinked_super_graph.subgraph(noise_graph.nodes)))
+        # All nodes within the same noise sub-graph have the same value for the episode attribute.
+        # ... But only if they are derived from the unconnected super-graph!
+        assert all(len({noise_graph.nodes[node]['episode'] for node in nodes}) == 1 for nodes in noise_nodes_sub_graphs)
+    
+        for nodes_sub_graph in noise_nodes_sub_graphs:
+            node = util.set_first(nodes_sub_graph)
+            index = noise_graph.nodes[node]['episode']
+            # print(f"  - noise net, episode {index + 1}, size {len(nodes_sub_graph)}")
+            episode_info = episode_infos[index]
+            sub_graph = episode_info['graph'].subgraph(nodes_sub_graph)
+            episode_info['noise'].append(sub_graph)
+        
+        # ep_noise_nodes = {k: g for (k, g) in groupby(noise_nodes, lambda n: super_graph.nodes[n]['episode'])}
+        # for index, nodes in ep_noise_nodes.items():
+        #     episode_infos[index]['noise'] = nodes
+
+        # noise is any shared sub-network that is not connected to any input network
+        # all_shared_nets = [ei['shared'].copy() for ei in episode_infos]
+        # TODO this is horrible code, make more readable
+        # all_extended_input_nets = [ei['graph'].subgraph(frozenset(node for net in ei['input'] for node in maximise_subgraph(net, ei))) for ei in episode_infos]
+
+        #print("- all_extended_input_nets sizes:", [len(n) for n in all_extended_input_nets])
+        
+        # for shared_nets in zip(*all_shared_nets):
+        #     # shared_nets is a iterable of sets of equal shared nets (iterable length: number of episodes)
+        #     # if for this set of shared nets none is connected to an extended-input-net, then it's noise
+        #     if any(is_subgraph_of(snet, inet) for (snet, inet) in zip(shared_nets, all_extended_input_nets)):
+        #         continue
+        #     print(f"- Shared subnet of size {len(shared_nets[0])} identified as noise.")
+        #     for shared_net in shared_nets:
+        #         print(f"  - sn")
+        #         for node, proc in sorted(shared_net.nodes(data='entity'), key=lambda nd: util.set_first(nd[1].start).time):
+        #             print(f"    - {proc} @ {proc.get_centroid()}")
+        #     for episode_info, shared_net in zip(episode_infos, shared_nets):
+        #         extended_shared_net = maximise_subgraph(shared_net, episode_info)
+        #         episode_info['shared'].remove(shared_net)
+        #         if extended_shared_net not in episode_info['noise']:
+        #             episode_info['noise'].append(extended_shared_net)
+        #         else:
+        #             print(f"- Found noisy shared sub-network again.")
+
+        # solved, kept for reference
+        # problem: if one subgraph starts with two shared subnets, one of
+        #   which is part of an extended input subnet, then the subgraph
+        #   gets marked as noise nevertheless ("greedy noise marking")
+        # problem: algorithm only covers shared components, neglects noise
+        #   subgraphs without shared subnets (e.g. glider before exit rect)
+
+        # print noise removal summary
+        for index, episode_info in enumerate(episode_infos):
+            ep_nets = episode_info['noise']
+            if ep_nets:
+                sizes_str = ", ".join(str(size) for size in sorted((len(net) for net in ep_nets), reverse=True))
+            else:
+                sizes_str = '(none)'
+            print(f"- Noise sizes in episode {index + 1}: {sizes_str}")
+
+        print()
+        print("Output sub-networks.")
+
+        # for input/shared sub-networks, get full networks, then get last sub-networks
+        # those correspond to the output vehicles
+
+        print("TODO how to detect the same output?")
+
+        for index, episode_info in enumerate(episode_infos):
+            ep_start_nets = episode_info['input'] + episode_info['shared']
+            ep_start_nets_extended = [maximise_subgraph(net, episode_info) for net in ep_start_nets]
+            # episode_info['core'] = ep_start_nets_extended
+            
+            # FIXME this does not really check whether there are enough output processes chained
+            # good enough for now
+            min_output_time = episode_info['end'] - episodes_output_min_units
+            ep_end_nodes = [n for net in ep_start_nets_extended for (n, time) in net.nodes(data='time') if time > min_output_time]
+            ep_end_graph = episode_info['graph'].subgraph(ep_end_nodes)
+            ep_end_nets = [ep_end_graph.subgraph(cc) for cc in nx.weakly_connected_components(ep_end_graph)]
+            episode_info['output'] = ep_end_nets
+
+            sizes_str = ", ".join(str(size) for size in sorted((len(net) for net in ep_end_nets), reverse=True))
+            print(f"- Episode {index + 1}, sizes: {sizes_str}")
+
+        print()
+        print("Sanity check and summary.")
+
+        keys = ['shared', 'input', 'output', 'noise']
+        strict_noise_removal = self.config.getboolean('observer', 'strict_noise_removal', fallback=False)
+            
+        for index, episode_info in enumerate(episode_infos):
+            nodes_data = dict(episode_info['graph'].nodes.items())
+            for key_index, key in enumerate(keys):
+                for subgraph in episode_info[key]:
+                    for node, data in subgraph.nodes(data=True):
+                        # Manipulate graph data instead of 'data', for the
+                        # cases when some of the code above could not acquire
+                        # a view of the graph, but only a copy/new graph.
+                        if not strict_noise_removal and 'cycle' in nodes_data[node]:
+                            print(f"- Overlapping sets in episode {index + 1}! Tried '{key}', found '{nodes_data[node]['cycle']}'. Skipping.")
+                            # print(f"  - Node was '{node}': {data['entity']}")
+                            continue
+                        nodes_data[node]['cycle_num'] = key_index + 1
+                        nodes_data[node]['cycle'] = key
+
+        # print table
+        keys = ['shared', 'input', 'output', 'noise', 'core']
+        headers = ['Episode'] + [k.capitalize() for k in keys]
+        data = [[i + 1] + [", ".join(str(s) for s in sorted((len(n) for n in ei.get(k, [])), reverse=True)) or "-" for k in keys] for (i, ei) in enumerate(episode_infos)]
+        util.print_tabular_data(data, headers)
+        print()
+
+        if self.config.getboolean('cytoscape', 'comp_summary', fallback=False):
+            for index, episode_info in enumerate(episode_infos):
+                util.send_graph_to_cytoscape(episode_info['graph'], f"Summary of episode {index + 1}")
+
+        False and print("""
+ _____ _   _  ____ _  __
+|  ___| | | |/ ___| |/ /    Don't check processes, but components.
+| |_  | | | | |   | ' /     And reconsider that too.
+|  _| | |_| | |___| . \     Also don't forget process composition.
+|_|    \___/ \____|_|\_\    OUTPUT/NOISE/CLEANED VALUES CHANGE RANDOMLY.
+                            NOW IT'S TOO MUCH NOISE FUUUUU (but reliably)
+                            BUT CLEANED STILL RANDOM FUUUUUU
+""")
+
+        
+        # [questions]
+        # how to detect end of implementation of computation?
+        # - no output (destructive process)
+        # - no distinguishable output (noise, but no components)
+        # - detection after last input
+        # - minimum-time to wait for input, maximum-time to wait for output
+        # - identification of space "where it's at" and process departure of that space ("locality")
+        #
+        # how to tell output scaffold from output vehicles?
+        # output scaffold expected to be the same everytime?
+        # - similarity of components (same properties)
+        # - don't require output scaffold
+        # - output scaffold optional, special class of "reusable comp-impl" or something
+        #
+        # how can computation be composed recursively?
+        # - via process-concatenation
+        #
+        # is it necessary at all to distinguish a scaffold component explicity? or why only one?
+        # - compromise: adapt datastructure to allow set of scaffold components
+        # - handling of empty set of scaffold components as "future work"
+
+        # [thoughts]
+        # rename output scaffold to noise/residue?
+        # special cases of output scaffold/noise/residue
+        # - none (destructive process)
+        # - consistent across episodes (some, all)
+        # - same as input (regenerating; autopoietic?)
+        # second glider in 11/1-AND can be identified as input vehicle via 10/0-AND and matching space
+        # use components (not just SST) as factors to determine process-end properties!
+        # NOT as most basic form of computation (in GOL)
+        # - so in GOL, two parallel/timed NOTs are one AND
+        # heuristics have their place here to determine end of computation (/ to work out proc)
+        
+        pass
+                    
+
+    def __old_code_for_reference_do_not_use(self):
 
         # all processes that have no or multiple previous proceses
         traj_starts = [p for p in next_procs if len(next_procs[p]) == 1 and len(prev_procs.get(p, [])) != 1]

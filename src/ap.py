@@ -11,10 +11,11 @@ from collections import defaultdict
 from typing import NamedTuple, Dict, Tuple, List, Set
 from itertools import product
 #from dataclasses import dataclass
+import pickle
 
-from importlib import reload
+#from importlib import reload
 import util
-reload(util)
+#reload(util)
 from util import set_first #, make_structure_class
 
 
@@ -55,13 +56,95 @@ class Structure(NamedTuple):
 # relation: at one time. process: multiple start/end structures
 class Process(NamedTuple):
     """DOC"""
+    
     kind: str
     start: frozenset[Component]
     end: frozenset[Component]
+
+    #def __init__(self, *args, **kwargs):
+    #    super().__init__(*args, **kwargs)
+    #    self._hash = None        
+
     def __repr__(self) -> str:
         start_str = ", ".join(repr(co) for co in self.start)
         end_str = ", ".join(repr(co) for co in self.end)
         return f'<P {self.kind} {{{start_str}}} {{{end_str}}}>'
+    
+    # TODO check whether this is inline with theory and if so move elsewhere
+    # TODO save hash, as calculation is expensive
+    def to_hash(self):
+        #if self._hash:
+        #    return self._hash
+
+        # TODO more elegant way to name and where to put
+        # hard-coded value domain for optimisation
+        transition_table = self._get_transition_table([None, True, False])
+
+        # FUTURE review current assumptions: t2-t1=1
+        comps1_space = frozenset.union(*(co.space for co in self.start))
+        c1_xy_min_max = self._get_space_bb(comps1_space)
+
+        if self.end:
+            comps2_space = frozenset.union(*(co.space for co in self.end))
+            c2_xy_min_max = self._get_space_bb(comps2_space)
+            x_mins, x_maxs, y_mins, y_maxs = zip(c1_xy_min_max, c2_xy_min_max)
+            xy_min_max = min(x_mins), max(x_maxs), min(y_mins), max(y_maxs)
+            values2 = self._get_space_values(comps2_space, xy_min_max)
+        else:
+            x_min, x_max, y_min, y_max = c1_xy_min_max
+            values2 = [None] * ((x_max - x_min) * (y_max - y_min))
+            xy_min_max = c1_xy_min_max
+
+        values1 = self._get_space_values(comps1_space, xy_min_max)
+        transitions = [transition_table[tuple(pair)] for pair in zip(values1, values2)]
+
+        #self._hash = util.better_hash(tuple(transitions))
+        #return self._hash
+        hash_str = util.better_hash(tuple(transitions))
+
+        return hash_str
+
+    def _get_space_bb(self, space):
+        loc_iter = iter(cell.location for cell in space)
+        loc = next(loc_iter)
+        x_min, x_max, y_min, y_max = loc.x, loc.x, loc.y, loc.y
+        for loc in loc_iter:
+            if loc.x < x_min: x_min = loc.x
+            if loc.x > x_max: x_max = loc.x
+            if loc.y < y_min: y_min = loc.y
+            if loc.y > y_max: y_max = loc.y
+        return x_min, x_max, y_min, y_max
+
+    def _get_space_values(self, space, xy_min_max):
+        x_min, x_max, y_min, y_max = xy_min_max
+        x_delta, y_delta = x_max - x_min, y_max - y_min
+        values = [None] * ((x_delta + 1) * (y_delta + 1))
+        #width = x_delta if x_delta > 0 else 1
+        for cell in space:
+            dx, dy = cell.location.x - x_min, cell.location.y - y_min
+            #index = dy * width + dx % width
+            index = dy * (x_delta + 1) + dx
+            values[index] = cell.value
+        return values
+
+    def _get_transition_table(self, value_domain):
+        transition_table = {}
+        value_domain_len = len(value_domain)
+        for index_from, value_from in enumerate(value_domain):
+            for index_to, value_to in enumerate(value_domain):
+                # TODO index_to and index_from should be swapped (better not changing rn)
+                number = index_to * value_domain_len + index_from
+                transition_table[(value_from, value_to)] = number
+        return transition_table
+
+    def get_centroid(self):
+        comps = frozenset.union(self.start, self.end)
+        locs = frozenset(cell.location for comp in comps for cell in comp.space)
+        locs_count = len(locs)
+        center_x = sum(loc.x for loc in locs) / locs_count
+        center_y = sum(loc.y for loc in locs) / locs_count
+        return (center_x, center_y)
+
 
 class ProcessRelation(NamedTuple):
     """DOC"""
@@ -203,31 +286,87 @@ class Environment:
 class Discrete2DEnvironment(Environment):
     pass
     
+
+# helper function for pickling
+def _ddl():
+    return defaultdict(list)
+
     
 class Observer:
 
+    _SERIALISATION_KEYS = [
+        'components',
+        'relations',
+        'processes',
+        #'component_recognisers',
+        #'relation_recognisers',
+        #'process_recognisers'
+    ]
+    _SERIALISATION_VERSION = 1
+
+    
     def __init__(self):
         # self.environment = environment
         # Note: The `kind` keys are help for development and debugging. They
         # are not meaningful in the scope of the model.
 
+        #class ddl(defaultdict):
+        #    def __init__(self, *args, **args):
+        #        super().__init__(self, )
+
         # TODO create custom types, not this nested mess
         # TODO rename to unities
-        self.components: Dict[int, Dict[str, Component]] = defaultdict(lambda: defaultdict(list))
+        self.components: Dict[int, Dict[str, Component]] = defaultdict(_ddl)
         # TODO rename to component_relations
-        self.relations: Dict[int, Dict[str, ComponentRelation]] = defaultdict(lambda: defaultdict(list))
+        self.relations: Dict[int, Dict[str, ComponentRelation]] = defaultdict(_ddl)
 
-        self.structures: Dict[int, Dict[str, Structure]] = defaultdict(lambda: defaultdict(list))
+        #self.structures: Dict[int, Dict[str, Structure]] = defaultdict(lambda: defaultdict(list))
         self.processes: Dict[int, Process] = defaultdict(list)
-        self.process_relations: Dict[int, ProcessRelation] = defaultdict(list)
-        self.organisations: Dict[int, Organisation] = defaultdict(list)
+        #self.process_relations: Dict[int, ProcessRelation] = defaultdict(list)
+        #self.organisations: Dict[int, Organisation] = defaultdict(list)
 
         self.component_recognisers = {}
         self.relation_recognisers = {}
         self.process_recognisers = {}
 
+
+    def dump_memory(self, path):
+        cls = self.__class__
+        fields = {key: getattr(self, key) for key in cls._SERIALISATION_KEYS}
+        #cells = {(c.location, c.time): c for c in self.environment._history}
+        data = {
+            #'cells': cells,
+            'fields': fields,
+            'version': cls._SERIALISATION_VERSION
+        }
+        #for cell in self.environment._history:
+        #    # FIXME this is kinda bad
+        #    cell._neighbours = None
+        with open(path, 'wb') as f:
+            pickle.dump(data, f)
+
+
+    @classmethod
+    def from_memory_dump(cls, path, *args):
+        with open(path, 'rb') as f:
+            data = pickle.load(f)
+        assert data['version'] == cls._SERIALISATION_VERSION
+        print("Warning: Loaded memory includes no inter-cell links in environment.")
+        comp = data['fields']['components'][0]['alive-single'][0]
+        observer = cls(*args)
+        observer.setup_recognisers()
+        for key, field in data['fields'].items():
+            setattr(observer, key, field)
+        return observer
+            
+
     def observe(self):
         pass
+
+
+    def reflect(self):
+        pass
+    
 
     def recognise_component(self, kind, space, time):
         """Aka. distinction. 

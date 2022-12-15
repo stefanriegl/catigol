@@ -1,21 +1,51 @@
 
 from collections import defaultdict
-from itertools import product
+from itertools import product, groupby
 from shutil import copy as shutil_copy
-import os.path
+from os import getcwd
+from os.path import join as path_join, exists as path_exists, dirname as path_dirname
 import sys
 from json import dumps as json_dumps
 from subprocess import run as subprocess_run
 from threading import Thread
+from queue import Queue, Empty
+from datetime import datetime
 
 #from ap import StructureClass, ComponentRelationConstraint
 
 import networkx as nx
+import py4cytoscape as p4c
 from matplotlib import pyplot as plot
 # import subprocess
 import pandas as pd
 
 
+BANNER_GLYPHS = '#*+'
+
+def print_banner(text, level, width=80, indent=2):
+    glyph = BANNER_GLYPHS[level]
+    padding = max(0, 2 - level)
+    box_width = width - 2 * indent
+    
+    indent_str = ' ' * indent
+    text_str = ' ' * int((box_width - len(text) - 2) / 2) + text
+    text_str += ' ' * (box_width - len(text_str) - 2)
+    space_str = ' ' * (box_width - 2)
+    
+    line_hbar = indent_str + glyph * box_width
+    line_text = indent_str + glyph + text_str + glyph
+    line_padding = indent_str + glyph + space_str + glyph
+    
+    print()
+    print(line_hbar)
+    for _ in range(padding): print(line_padding)
+    print(line_text)
+    for _ in range(padding): print(line_padding)
+    print(line_hbar)
+    print()
+    
+
+# deprecated
 class ReportSection:
     def __init__(self, header=None, footer=None, glyph='*', width=78):
         self.width = width
@@ -40,6 +70,13 @@ def set_first(s):
         return e
     #return None
     raise ValueError("Empty set!")
+
+
+def better_hash(obj):
+    h = hash(obj)
+    h = (h + 2**32) % 2**32
+    h = f'{h:08x}'
+    return h
 
 
 # FUTURE naming of variables
@@ -183,13 +220,62 @@ def get_procs_graph(graph_dict):
         time_start = max(c.time for c in proc.start)
         time_end = min(c.time for c in proc.end) if proc.end else time_start + 1
         time = (time_start + time_end) / 2
+        centroid = proc.get_centroid()
 
-        graph.add_node(node_id, category='process', time=time, entity=proc, index=index)
+        graph.add_node(node_id, category='process', time=time, entity=proc, index=index, centroid=centroid)
 
     for pf, pt in links:
         graph.add_edge(node_ids[pf], node_ids[pt])
 
     return graph
+
+
+def get_proc_adjacency_matrix(procs, also_backward_links=False):
+    # By putting processes into time buckets and single-looping over pairs
+    # afterwards we reduce time complexity from O(n^2) to O(k*n) for some
+    # constant k.
+    # Empirical evidence: Massive performance boost.
+        
+    proc_times_start = {p: set_first(p.start).time for p in procs}
+    proc_sorter = lambda p: proc_times_start[p]
+    procs_sorted = sorted(procs, key=proc_sorter)
+    procs_by_time = {time: list(group) for (time, group) in groupby(procs, key=proc_sorter)}
+    time_keys = list(procs_by_time.keys())
+    time_pairs = [(t1, t2) for (t1, t2) in zip(time_keys[:-1], time_keys[1:])]
+    next_procs = {}  # {proc: [proc, ...]}
+    
+    if also_backward_links:
+        prev_procs = {}  # {proc: [proc, ...]}
+        
+    for time_from, time_to in time_pairs:
+        for proc_from in procs_by_time[time_from]:
+            for proc_to in procs_by_time[time_to]:
+                if not proc_from.end:
+                    # destructive process, skip
+                    continue
+
+                # optimisation: quicker check for component times than set operations
+                # works due to asserted assumptions above
+                # edit: superseded, kept for reference before cleanup
+                #if proc_times_end[proc_from] != proc_times_start[proc_to]:
+                #    continue
+                
+                if not proc_from.end.isdisjoint(proc_to.start):
+                    if proc_from in next_procs:
+                        next_procs[proc_from].append(proc_to)
+                    else:
+                        next_procs[proc_from] = [proc_to]
+                        
+                    if also_backward_links:
+                        if proc_to in prev_procs:
+                            prev_procs[proc_to].append(proc_from)
+                        else:
+                            prev_procs[proc_to] = [proc_from]
+
+    if also_backward_links:
+        return next_procs, prev_procs
+    else:
+        return next_procs
 
 
 def write_graph(graph, output_file_path, separate_components=True, do_labels=True, zoom=5, multipartite_layout=True):
@@ -398,11 +484,11 @@ def group_overlapping_processes(processes):
 
 
 def write_graph_explorer(graph, dest_dir):
-    if not os.path.exists(dest_dir):
+    if not path_exists(dest_dir):
         os.mkdir(dest_dir)
     index_path = f'{dest_dir}/index.html'
     #if not os.path.exists(index_path):
-    script_dir = os.path.dirname(__file__)
+    script_dir = path_dirname(__file__)
     shutil_copy(f'{script_dir}/explorer.html', index_path)
 
     #node_groups = {
@@ -486,34 +572,73 @@ class ErrorStreamRedirect:
     def __exit__(self, exc_type, exc_value, exc_traceback):
         sys.stderr = self._original
 
+
+class TaskQueue:
+    def __init__(self):
+        self.__tasks = Queue()
+        self.__thread = Thread(target=self.__run)
+        self.__stopped = False
+    def start(self):
+        self.__thread.start()
+    def stop(self):
+        self.__stopped = True
+    def add_task(self, task):
+        self.__tasks.put(task)
+    def __run(self):
+        while not (self.__stopped and self.__tasks.empty()):
+            try:
+                task = self.__tasks.get(block=True, timeout=1)
+                task()
+            except Empty:
+                pass
         
-def send_graph_to_cytoscape(graph, network_title, background=False):
-    import py4cytoscape as p4c
-    from datetime import datetime as dt
 
-    try:
-        # Golly prints messages that went to stderr in a popup window.
-        # Redirect stderr to stdout in this case, i.e. fail silently,
-        # if Cytoscape is just not running.
-        with ErrorStreamRedirect(sys.stdout):
-            p4c.cytoscape_ping()
-    except:
-        print("Cannot ping Cytoscape, not exporting.")
-        return
+__cytoscape_task_queue = None
 
+
+def terminate_cytoscape_connection():
+    global __cytoscape_task_queue
+    if __cytoscape_task_queue:
+        __cytoscape_task_queue.stop()
+    
+        
+def send_graph_to_cytoscape(graph, network_title):
+    global __cytoscape_task_queue
+    
+    if not __cytoscape_task_queue:
+        try:
+            # Golly prints messages that went to stderr in a popup window.
+            # Redirect stderr to stdout in this case, i.e. fail silently,
+            # if Cytoscape is just not running.
+            with ErrorStreamRedirect(sys.stdout):
+                # may raise exception
+                p4c.cytoscape_ping()
+        except:
+            print("Cannot ping Cytoscape, not exporting.")
+            return
+        __cytoscape_task_queue = TaskQueue()
+        __cytoscape_task_queue.start()
+
+    # FUTURE not the best place to keep this, but can't be bothered at this point
     collection_name = "CATIGOL"
-    date_str = dt.now().strftime('%F %H:%M:%S')
+    style_name = "[MAIT] Processes with cycles"
+    
+    date_str = datetime.now().strftime('%F %H:%M:%S')
     network_name = f"{network_title} - {date_str}"
-
+    node_name_salt = str(int(datetime.now().timestamp() % (24 * 60 * 60)))
+    
     def conv(obj):
         return obj if type(obj) in [str, int, bool, float] else repr(obj)
 
     def render_name(text):
         tokens = text.split('-')
         abbr = ''.join(t[0] for t in tokens[:-1])
-        text = f"{abbr}-{tokens[-1]}"
+        text = f"{node_name_salt}-\n{abbr}-{tokens[-1]}"
         return text
 
+    # deprecated, data type defaults to string?
+    # FUTURE maybe check again to avoid unnecessary complexity
+    # don't forget to adapt p4c call below to CytoscapeDispatcher class above
     if False:
         nodes = graph.nodes(data=True)
         nodes = [(n, {k: conv(v) for (k, v) in d.items()}) for (n, d) in nodes]
@@ -557,27 +682,61 @@ def send_graph_to_cytoscape(graph, network_title, background=False):
     if len(nodes_df.index) == 0: nodes_df = None
     if len(edges_df.index) == 0: edges_df = None
 
-    if background:
-        # export in background
-
-        def do_export():
-            print(f"Starting export of '{network_title}' to Cytoscape in background.")
-            try:
-                p4c.create_network_from_data_frames(
-                    nodes=nodes_df, edges=edges_df, title=network_name, collection=collection_name,
-                    node_id_list='name')
-                print("Export to Cytoscape in background finished successfully.")
-            except:
-                print("Error: Export to Cytoscape in background failed.")
-        
-        Thread(target=do_export).start()
-    else:
+    def do_export():
+        # print(f"Starting export of '{network_title}' to Cytoscape in background.")
         try:
-            print(f"Exporting '{network_title}' to Cytoscape... ", end='', flush=True)
             p4c.create_network_from_data_frames(
                 nodes=nodes_df, edges=edges_df, title=network_name, collection=collection_name,
                 node_id_list='name')
-            print("done.")
-        except Exception as ex:
-            print("error.")
-            print(ex)
+            p4c.set_visual_style(style_name)
+            print(f"Export of '{network_title}' to Cytoscape finished successfully.")
+        except:
+            print(f"Error: Export of '{network_title}' to Cytoscape failed.")
+            
+    #Thread(target=do_export).start()
+    print(f"Scheduling export of '{network_title}' to Cytoscape.")
+    __cytoscape_task_queue.add_task(do_export)
+    # else:
+    #     try:
+    #         print(f"Exporting '{network_title}' to Cytoscape... ", end='', flush=True)
+    #         p4c.create_network_from_data_frames(
+    #             nodes=nodes_df, edges=edges_df, title=network_name, collection=collection_name,
+    #             node_id_list='name')
+    #         p4c.set_visual_style(style_name)
+    #         print("done.")
+    #     except Exception as ex:
+    #         print("error.")
+    #         print(ex)
+
+
+def get_path(rel_path):
+    return path_join(getcwd(), '..', rel_path)
+
+
+def print_tabular_data_old(data, headers):
+    index = range(1, len(data) + 1)
+    # this is pretty stupid, but will do to avoid unnecessary external dependencies
+    headers = [f' |  {h}' for h in headers]
+    formatters = [lambda c: f'|  {c}'] * len(headers)
+    df = pd.DataFrame(data=data, index=index, columns=headers, dtype=str)
+    # print(df.to_markdown())
+    print(df.to_string(justify='left', formatters=formatters))
+
+def print_tabular_data(data, headers):
+    rows = [headers] + [[str(cell) for cell in row] for row in data]
+    widths = [max(len(cell) for cell in col) for col in zip(*rows)]
+
+    hbar_str = "-+-".join("-" * width for width in widths)
+    hbar_str = f"+-{hbar_str}-+"
+
+    def fmt_row(cells):
+        row_str = " | ".join(f"{{:{w}s}}".format(c) for (c, w) in zip(cells, widths))
+        return f"| {row_str} |"
+
+    print(hbar_str)
+    print(fmt_row(rows[0]))
+    print(hbar_str)
+    for row in rows[1:]:
+        print(fmt_row(row))
+    print(hbar_str)
+    

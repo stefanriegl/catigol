@@ -2,22 +2,25 @@
 
 from collections import defaultdict, Counter
 from pprint import pprint
-import threading
+from threading import main_thread as threading_main_thread, enumerate as threading_enumerate
+from configparser import ConfigParser
 
 import golly as g
 
+import ap
 import apgol
 import util
 
 # better integration for Golly
 import importlib
+importlib.reload(ap)
 importlib.reload(util)
 importlib.reload(apgol)
 
 
 
 #GENERATIONS_TO_RUN = 6
-GENERATIONS_TO_RUN = 35
+#GENERATIONS_TO_RUN = 35
 #GENERATIONS_TO_RUN = 135
 
 
@@ -62,27 +65,76 @@ def get_simulation_rect(g):
     
 def main():
 
-    with util.ReportSection("Autopoietic Game of Life", glyph='#'):
-        pass
+    config = ConfigParser()
+    config.read(util.get_path('config.ini'))
 
-    with util.ReportSection("Setting up and simulating environment."):
+    for _ in range(5): print()
+    util.print_banner("Computational Autopoietic Theory in Game of Life", 0)
+
+    if config.getboolean('main', 'load_memory', fallback=False):
+        memory_path = util.get_path(config.get('main', 'path_memory'))        
+        # util.print_banner("Loading stored memory", 1)
+        print("Loading stored memory.")
+        
+        env = None
+        obs = apgol.GolObserver.from_memory_dump(memory_path, env, config)
+        
+    else:
+        
+        util.print_banner("Setting up and simulating environment", 1)
+        
         g.reset()
         rect = get_simulation_rect(g)
         env = apgol.GolEnvironment(g, rect)
         env.setup()
-        obs = apgol.GolObserver(env)
+    
+        obs = apgol.GolObserver(env, config)
+
+        # observation phase
+
+        util.print_banner("Observing initial state", 1)
+        verbose_observe = config.getboolean('debug', 'verbose_observe', fallback=False)
+        generations = config.getint('observer', 'generations')
         obs.observe()
 
-        for gen in range(GENERATIONS_TO_RUN):
+        for gen in range(generations):
+            if verbose_observe:
+                # FUTURE may include time as parameter here
+                util.print_banner(f"Observing state at time unit {gen}", 2)
+            else:
+                print('.', end='', flush=True)
+                
             env.simulate_step()
-            # FUTURE may include time as parameter here
             obs.observe()
 
-        obs.reflect()
+        if verbose_observe:
+            print(flush=True)
+            print(flush=True)
 
-    print()
-    print("STOPPING")
-    return
+        # reflection phase
+
+        if config.getboolean('observer', 'phase_reflect', fallback=True):
+            util.print_banner("Reflecting", 1)
+            obs.reflect()
+
+    # detect computation
+            
+    if config.getboolean('observer', 'phase_detect_computation', fallback=True):
+        util.print_banner("Detect computation", 1)
+        obs.detect_computation()
+
+    util.print_banner("End of observer procedure", 1)
+
+    # store memory
+
+    if config.getboolean('main', 'save_memory', fallback=False):
+        memory_path = util.get_path(config.get('main', 'path_memory'))
+        print("Storing memory.")
+
+        obs.dump_memory(memory_path)
+
+
+def main_old():
             
         # print(f"Recording {GENERATIONS_TO_RUN}+1 generations... ", end='')
         # env.record_values(golly_get_sel_values(g, rect), 0)
@@ -304,14 +356,18 @@ def main():
 
 
 def wait_for_threads():
-    main_thread = threading.main_thread()
-    all_threads = threading.enumerate()
+    main_thread = threading_main_thread()
+    all_threads = threading_enumerate()
     other_threads = [t for t in all_threads if t != main_thread and t.is_alive()]
 
     if not other_threads:
         return
 
-    print(f"Waiting for {len(other_threads)} thread(s) to finish.")
+    util.terminate_cytoscape_connection()
+
+    count = len(other_threads)
+    threads_str = 'thread' if count == 1 else 'threads'
+    print(f"Waiting for {count} {threads_str} to finish.")
 
     for thread in other_threads:
         thread.join()
@@ -320,8 +376,4 @@ def wait_for_threads():
 
 
 main()
-
-if True:
-    wait_for_threads()
-
-print("End of routine.")
+wait_for_threads()
